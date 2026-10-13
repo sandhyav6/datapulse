@@ -17,6 +17,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from .config import Schema
 
@@ -80,9 +81,27 @@ def row_from_values(columns: list[str], values: list[str]) -> tuple[dict[str, st
     return row, ([] if len(values) == len(columns) else [MALFORMED_ROW])
 
 
+# Strict regex fast paths for common formats; strptime (slow: locale lookups on every call)
+# remains the fallback for any other format a schema declares.
+_FAST_DATES = {
+    "%Y-%m-%d": (re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$"), (0, 1, 2)),
+    "%d/%m/%Y": (re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$"), (2, 1, 0)),
+    "%m/%d/%Y": (re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$"), (2, 0, 1)),
+    "%d-%m-%Y": (re.compile(r"^(\d{1,2})-(\d{1,2})-(\d{4})$"), (2, 1, 0)),
+}
+
+
 def parse_date(value: str, formats: tuple[str, ...]) -> date | None:
     for fmt in formats:
+        fast = _FAST_DATES.get(fmt)
         try:
+            if fast:
+                match = fast[0].match(value)
+                if not match:
+                    continue
+                parts = match.groups()
+                year, month, day = (int(parts[i]) for i in fast[1])
+                return date(year, month, day)
             return datetime.strptime(value, fmt).date()
         except ValueError:
             continue
@@ -102,32 +121,47 @@ def parse_decimal(value: str) -> Decimal | None:
         return None
 
 
-def validate_row(row: dict[str, str | None], schema: Schema) -> list[str]:
-    """Return every reason the row is invalid; an empty list means the row is valid."""
+def parse_row(row: dict[str, str | None], schema: Schema) -> tuple[list[str], dict[str, Any]]:
+    """Validate and type-convert a row in one pass.
+
+    Returns (reasons, values): reasons is empty when the row is valid, and values holds each
+    column parsed once (date, int, Decimal or stripped str; None when empty) so the transformer
+    never parses the same field twice.
+    """
     reasons: list[str] = []
+    values: dict[str, Any] = {}
     for name, spec in schema.columns.items():
         value = (row.get(name) or "").strip()
         if not value:
             if spec.required:
                 reasons.append(f"missing_{name}")
+            values[name] = None
             continue
 
-        number: int | Decimal | None = None
+        parsed: Any = value
         if spec.type == "date":
-            if parse_date(value, spec.formats) is None:
+            parsed = parse_date(value, spec.formats)
+            if parsed is None:
                 reasons.append(f"invalid_{name}")
         elif spec.type == "integer":
-            number = parse_integer(value)
-            if number is None:
+            parsed = parse_integer(value)
+            if parsed is None:
                 reasons.append(f"non_integer_{name}")
         elif spec.type == "decimal":
-            number = parse_decimal(value)
-            if number is None:
+            parsed = parse_decimal(value)
+            if parsed is None:
                 reasons.append(f"invalid_{name}")
+        values[name] = parsed
 
-        if number is not None and spec.min is not None and number < Decimal(str(spec.min)):
-            reasons.append(f"negative_{name}" if number < 0 <= spec.min else f"below_min_{name}")
-    return reasons
+        if (spec.type in ("integer", "decimal") and parsed is not None
+                and spec.min is not None and parsed < spec.min_decimal):
+            reasons.append(f"negative_{name}" if parsed < 0 <= spec.min else f"below_min_{name}")
+    return reasons, values
+
+
+def validate_row(row: dict[str, str | None], schema: Schema) -> list[str]:
+    """Return every reason the row is invalid; an empty list means the row is valid."""
+    return parse_row(row, schema)[0]
 
 
 class Deduplicator:

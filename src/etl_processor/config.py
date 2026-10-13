@@ -10,7 +10,10 @@ import ast
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
+from functools import cached_property
 from pathlib import Path
 
 COLUMN_TYPES = {"string", "date", "integer", "decimal"}
@@ -39,6 +42,10 @@ class ColumnSpec:
     normalise: str | None = None
     min: float | None = None
 
+    @cached_property
+    def min_decimal(self) -> Decimal | None:
+        return None if self.min is None else Decimal(str(self.min))
+
 
 @dataclass(frozen=True)
 class AggregateSpec:
@@ -53,7 +60,7 @@ class Schema:
     columns: dict[str, ColumnSpec]
     dedup_key: str | None = None
     dedup_policy: str = "none"
-    derived: dict[str, ast.Expression] = field(default_factory=dict)
+    derived: dict[str, Callable[[dict], Decimal]] = field(default_factory=dict)
     derived_source: dict[str, str] = field(default_factory=dict)
     measure: str | None = None
     metrics: dict[str, str] = field(default_factory=dict)
@@ -98,8 +105,35 @@ class Settings:
         )
 
 
-def _compile_expression(name: str, source: str, numeric: set[str]) -> ast.Expression:
-    """Parse a derived-field formula, allowing only arithmetic on numeric columns."""
+_BINOPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b,
+}
+
+
+def _build(node: ast.AST) -> Callable[[dict], Decimal]:
+    """Turn a validated formula AST into nested closures, built once per schema load."""
+    if isinstance(node, ast.Expression):
+        return _build(node.body)
+    if isinstance(node, ast.Constant):
+        constant = Decimal(str(node.value))
+        return lambda row: constant
+    if isinstance(node, ast.Name):
+        column = node.id
+        return lambda row: Decimal(row[column])
+    if isinstance(node, ast.UnaryOp):
+        operand = _build(node.operand)
+        if isinstance(node.op, ast.USub):
+            return lambda row: -operand(row)
+        return operand
+    op, left, right = _BINOPS[type(node.op)], _build(node.left), _build(node.right)
+    return lambda row: op(left(row), right(row))
+
+
+def _compile_expression(name: str, source: str, numeric: set[str]) -> Callable[[dict], Decimal]:
+    """Compile a derived-field formula, allowing only arithmetic on numeric columns."""
     try:
         tree = ast.parse(source, mode="eval")
     except SyntaxError as exc:
@@ -113,7 +147,7 @@ def _compile_expression(name: str, source: str, numeric: set[str]) -> ast.Expres
             raise SchemaError(f"derived field {name!r}: {node.id!r} is not a numeric column")
         if isinstance(node, ast.Constant) and not isinstance(node.value, int | float):
             raise SchemaError(f"derived field {name!r}: only numeric constants allowed")
-    return tree
+    return _build(tree)
 
 
 def parse_schema(raw: dict) -> Schema:
@@ -149,7 +183,7 @@ def parse_schema(raw: dict) -> Schema:
         raise SchemaError(f"dedup_key {dedup_key!r} is not a column")
 
     numeric = {n for n, c in columns.items() if c.type in ("integer", "decimal")}
-    derived: dict[str, ast.Expression] = {}
+    derived: dict[str, Callable[[dict], Decimal]] = {}
     derived_source: dict[str, str] = {}
     for name, source in raw.get("derived", {}).items():
         if name in columns:

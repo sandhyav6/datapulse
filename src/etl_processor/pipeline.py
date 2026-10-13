@@ -17,8 +17,8 @@ from .validator import (
     HeaderResult,
     HeaderValidationError,
     check_header,
+    parse_row,
     row_from_values,
-    validate_row,
 )
 
 AcceptSink = Callable[[dict[str, Any]], None]
@@ -48,11 +48,12 @@ def process_rows(
         if not any(v.strip() for v in values):
             continue  # blank line
         raw, reasons = row_from_values(header_result.columns, values)
-        reasons += validate_row(raw, schema)
+        row_reasons, parsed = parse_row(raw, schema)
+        reasons += row_reasons
         clean = None
         if not reasons:
             try:
-                clean = transform_row(raw, schema)
+                clean = transform_row(raw, schema, parsed)
             except TransformError:
                 reasons.append(DERIVATION_ERROR)
         if not reasons:
