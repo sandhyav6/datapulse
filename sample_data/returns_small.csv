@@ -1,0 +1,51 @@
+return_id,return_date,product_category,quantity,refund_amount,reason
+RET-000001,2026-09-10,Books,3,132.91,damaged
+RET-000002,2026-10-05,Electronics,2,33.61,late delivery
+RET-000003,2026-10-03,Clothing,1,27.91,damaged
+RET-000004,2026-09-05,Clothing,1,176.29,late delivery
+RET-000005,2026-10-07,Electronics,1,172.69,late delivery
+RET-000006,2026-10-07,Sports,2,379.35,damaged
+RET-000007,2026-09-03,Sports,1,390.62,not as described
+RET-000008,2026-10-05,Electronics,3,170.56,not as described
+RET-000009,2026-09-12,Electronics,3,226.30,late delivery
+RET-000010,2026-09-24,Electronics,3,257.37,damaged
+RET-000011,2026-10-10,Clothing,2,227.93,late delivery
+RET-000012,2026-09-21,Books,3,173.90,changed mind
+RET-000013,2026-09-16,Toys,1,147.83,wrong size
+RET-000014,2026-09-20,Sports,2,37.33,not as described
+RET-000015,2026-09-19,Sports,1,293.13,damaged
+RET-000016,2026-09-11,Toys,2,207.21,wrong size
+RET-000017,2026-09-27,Electronics,3,373.64,damaged
+RET-000018,2026-10-07,Toys,2,307.01,not as described
+RET-000019,2026-10-09,Books,3,279.64,changed mind
+RET-000020,2026-09-06,Home & Kitchen,2,32.16,damaged
+RET-000021,2026-09-20,Beauty,3,28.96,changed mind
+RET-000022,2026-09-25,Beauty,2,117.42,damaged
+RET-000023,2026-09-23,Clothing,3,376.56,damaged
+RET-000024,2026-09-14,Toys,2,200.01,wrong size
+RET-000025,2026-09-26,Books,2,296.65,damaged
+RET-000026,2026-09-26,Sports,2,70.71,wrong size
+RET-000027,2026-10-06,Home & Kitchen,3,328.62,changed mind
+RET-000028,2026-09-25,Clothing,1,394.65,damaged
+RET-000029,2026-09-15,Beauty,1,74.61,damaged
+RET-000030,2026-10-08,Clothing,2,196.56,not as described
+RET-000031,2026-09-27,Sports,2,6.62,late delivery
+RET-000032,2026-09-09,Beauty,3,228.70,late delivery
+RET-000033,2026-09-04,Books,3,263.71,late delivery
+RET-000034,2026-09-26,Books,1,159.99,changed mind
+RET-000035,2026-09-04,Clothing,1,255.54,wrong size
+RET-000036,2026-09-08,Home & Kitchen,3,179.05,damaged
+RET-000037,2026-10-07,Clothing,3,45.44,damaged
+RET-000038,2026-10-10,Electronics,1,379.83,wrong size
+RET-000039,2026-09-10,Beauty,2,247.56,not as described
+RET-000040,2026-10-01,Electronics,1,242.90,changed mind
+RET-000041,2026-09-30,Books,2,397.28,not as described
+RET-000042,2026-09-07,Beauty,2,38.92,not as described
+RET-000043,2026-09-11,Sports,1,194.06,wrong size
+RET-000044,2026-10-04,Home & Kitchen,1,380.64,late delivery
+RET-000045,2026-10-04,Home & Kitchen,3,366.09,damaged
+RET-000046,2026-09-17,Sports,2,280.00,wrong size
+RET-000047,2026-09-15,Sports,3,145.50,late delivery
+RET-000048,2026-09-15,Sports,1,135.22,wrong size
+RET-000049,2026-09-15,Clothing,3,328.24,changed mind
+RET-000050,2026-09-02,Electronics,2,145.45,changed mind

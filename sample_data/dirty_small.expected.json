@@ -1,0 +1,14 @@
+{
+  "dataset": "sales",
+  "rows": 1000,
+  "accepted": 950,
+  "rejected": 50,
+  "rejection_reasons": {
+    "duplicate_id": 10,
+    "invalid_transaction_date": 10,
+    "invalid_unit_price": 10,
+    "missing_transaction_id": 10,
+    "negative_quantity": 10
+  },
+  "total_sales": 726980.02
+}

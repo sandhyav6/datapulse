@@ -1,0 +1,8 @@
+{
+  "dataset": "returns",
+  "rows": 50,
+  "accepted": 50,
+  "rejected": 0,
+  "rejection_reasons": {},
+  "total_refunds": 10552.88
+}

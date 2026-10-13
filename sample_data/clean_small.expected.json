@@ -1,0 +1,8 @@
+{
+  "dataset": "sales",
+  "rows": 100,
+  "accepted": 100,
+  "rejected": 0,
+  "rejection_reasons": {},
+  "total_sales": 79090.12
+}

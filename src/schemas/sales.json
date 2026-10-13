@@ -1,0 +1,21 @@
+{
+  "dataset": "sales",
+  "columns": {
+    "transaction_id":   {"type": "string",  "required": true},
+    "transaction_date": {"type": "date",    "required": true, "formats": ["%Y-%m-%d", "%d/%m/%Y"]},
+    "product_category": {"type": "string",  "required": true, "normalise": "title"},
+    "quantity":         {"type": "integer", "required": true, "min": 1},
+    "unit_price":       {"type": "decimal", "required": true, "min": 0},
+    "region":           {"type": "string",  "required": true, "normalise": "title"}
+  },
+  "dedup_key": "transaction_id",
+  "dedup_policy": "keep_first",
+  "derived": {"transaction_amount": "quantity * unit_price"},
+  "measure": "transaction_amount",
+  "metrics": {"total_sales": "sum", "avg_order_value": "mean"},
+  "aggregates": {
+    "daily_sales":       {"type": "daily", "column": "transaction_date"},
+    "sales_by_category": {"type": "group", "column": "product_category"},
+    "sales_by_region":   {"type": "group", "column": "region"}
+  }
+}

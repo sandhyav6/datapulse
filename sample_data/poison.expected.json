@@ -1,0 +1,8 @@
+{
+  "dataset": "sales",
+  "rows": 20,
+  "poison": true,
+  "missing_columns": [
+    "unit_price"
+  ]
+}

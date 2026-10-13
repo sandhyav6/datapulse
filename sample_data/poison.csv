@@ -1,0 +1,21 @@
+transaction_id,transaction_date,product_category,quantity,region
+TXN-0000001,2026-09-16,Beauty,5,central
+TXN-0000002,2026-09-14,Books,2,  CENTRAL 
+TXN-0000003,2026-09-15,Beauty,7,North
+TXN-0000004,18/09/2026,Clothing,6,east
+TXN-0000005,2026-10-09,books,6,West
+TXN-0000006,2026-10-10,Books,5,South
+TXN-0000007,2026-09-06,Electronics,5,West
+TXN-0000008,2026-09-24,Beauty,3,North
+TXN-0000009,2026-09-11,Clothing,4,  CENTRAL 
+TXN-0000010,2026-09-15,Home & Kitchen,1,West
+TXN-0000011,2026-09-21,Clothing,10,west
+TXN-0000012,2026-10-05,Clothing,9,Central
+TXN-0000013,2026-10-03,Clothing,3,  NORTH 
+TXN-0000014,09/10/2026,Clothing,7,West
+TXN-0000015,2026-09-08,Sports,1,East
+TXN-0000016,2026-09-11,Home & Kitchen,7,East
+TXN-0000017,2026-09-20,Toys,2,  SOUTH 
+TXN-0000018,2026-09-01,Toys,9,North
+TXN-0000019,2026-09-04,Toys,4,north
+TXN-0000020,09/09/2026,Books,9,  CENTRAL 
