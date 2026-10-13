@@ -113,7 +113,8 @@ class JobOutputs:
         import pyarrow.csv as pacsv
         import pyarrow.parquet as pq
 
-        types = {name: arrow_type(spec.type, pa) for name, spec in self.schema.columns.items()}
+        types = {name: arrow_type(spec.type, pa, spec.scale)
+                 for name, spec in self.schema.columns.items()}
         types.update({name: pa.decimal128(18, 2) for name in self.schema.derived})
         table = pacsv.read_csv(
             self.processed_path,
@@ -124,10 +125,10 @@ class JobOutputs:
         return self.parquet_path
 
 
-def arrow_type(column_type: str, pa):
+def arrow_type(column_type: str, pa, scale: int = 2):
     return {
         "string": pa.string(),
         "date": pa.date32(),
         "integer": pa.int64(),
-        "decimal": pa.decimal128(18, 2),
+        "decimal": pa.decimal128(18, scale),
     }[column_type]

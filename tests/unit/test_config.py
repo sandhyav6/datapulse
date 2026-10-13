@@ -24,7 +24,7 @@ def test_sales_schema_loads(sales_schema):
         "transaction_id", "transaction_date", "product_category", "quantity", "unit_price",
         "region"]
     assert sales_schema.output_columns[-1] == "transaction_amount"
-    assert sales_schema.dedup_key == "transaction_id"
+    assert sales_schema.dedup_key == ("transaction_id",)
     assert sales_schema.rules == ["required", "type", "min", "dedup"]
     assert [a.name for a in sales_schema.aggregates] == [
         "daily_sales", "sales_by_category", "sales_by_region"]
@@ -87,3 +87,48 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("OUTPUT_FORMAT", "xml")
     with pytest.raises(ValueError):
         Settings.from_env()
+
+
+def test_public_dataset_schemas_load():
+    temp = load_dataset_schema("global_temperature", SCHEMA_DIR)
+    assert temp.load_type == "snapshot"
+    assert temp.dedup_key == ("source", "year")
+    assert temp.columns["mean"].scale == 4 and temp.measure_scale == 4
+    assert temp.columns["year"].formats == ("%Y-%m",)
+    pop = load_dataset_schema("world_population", SCHEMA_DIR)
+    assert pop.measure_scale == 0
+    world = next(a for a in pop.aggregates if a.name == "world_population_by_year")
+    assert (world.type, world.func, world.where) == ("yearly", "sum", (("country_code", "WLD"),))
+
+
+TWO_COLS = {"k": {"type": "string"}, "d": {"type": "date"}, "n": {"type": "decimal"},
+            "y": {"type": "integer"}}
+
+
+@pytest.mark.parametrize("bad, message", [
+    ({"columns": {"n": {"type": "decimal", "scale": 9}}}, "scale"),
+    ({"columns": TWO_COLS, "dedup_key": ["k", "zz"]}, "dedup_key"),
+    ({"columns": TWO_COLS, "load_type": "streaming"}, "load_type"),
+    ({"columns": TWO_COLS, "measure": "n",
+      "aggregates": {"a": {"type": "group", "column": "k", "func": "mean"}}}, "incremental"),
+    ({"columns": TWO_COLS, "measure": "n", "load_type": "snapshot",
+      "aggregates": {"a": {"type": "yearly", "column": "k"}}}, "yearly"),
+    ({"columns": TWO_COLS, "measure": "n", "load_type": "snapshot",
+      "aggregates": {"a": {"type": "daily", "column": "d", "func": "max"}}}, "func"),
+    ({"columns": TWO_COLS, "measure": "n", "load_type": "snapshot",
+      "aggregates": {"a": {"type": "group", "column": "k", "func": "median"}}}, "func"),
+    ({"columns": TWO_COLS, "measure": "n",
+      "aggregates": {"a": {"type": "group", "column": "k", "where": {"zz": 1}}}}, "where"),
+    ({"columns": TWO_COLS, "measure": "n",
+      "aggregates": {"a": {"type": "group", "column": "k", "exclude": {"k": "X"}}}}, "exclude"),
+])
+def test_new_schema_rules(bad, message):
+    with pytest.raises(SchemaError, match=message):
+        parse_schema(minimal(**bad))
+
+
+def test_snapshot_allows_any_function_and_integer_years():
+    schema = parse_schema(minimal(columns=TWO_COLS, measure="n", load_type="snapshot",
+                                  aggregates={"a": {"type": "yearly", "column": "y",
+                                                    "func": "max"}}))
+    assert schema.aggregates[0].func == "max"

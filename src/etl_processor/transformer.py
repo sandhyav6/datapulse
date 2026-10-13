@@ -18,8 +18,16 @@ class TransformError(ValueError):
     """A derived field could not be computed (for example division by zero)."""
 
 
+_SCALES = {n: Decimal(1).scaleb(-n) for n in range(9)}
+
+
 def round_money(value: Decimal) -> Decimal:
     return value.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def round_to(value: Decimal, scale: int) -> Decimal:
+    """Half-up rounding to `scale` decimal places (2 for money, 4 for e.g. temperatures)."""
+    return value.quantize(_SCALES[scale], rounding=ROUND_HALF_UP)
 
 
 def normalise_label(value: str, mode: str | None) -> str:
@@ -48,7 +56,7 @@ def transform_row(row: dict[str, str | None], schema: Schema,
         if value is None:
             out[name] = None
         elif spec.type == "decimal":
-            out[name] = round_money(value)
+            out[name] = round_to(value, spec.scale)
         elif spec.type == "string":
             out[name] = normalise_label(value, spec.normalise)
         else:

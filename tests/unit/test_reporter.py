@@ -129,3 +129,59 @@ def test_pipeline_edge_rows(sales_schema):
 def test_pipeline_empty_file_is_poison(sales_schema, rows):
     with pytest.raises(HeaderValidationError):
         process_rows(rows, sales_schema, lambda r: None, lambda v, r: None)
+
+
+def test_aggregate_functions_and_where_filter():
+    schema = parse_schema({
+        "dataset": "t", "load_type": "snapshot",
+        "columns": {"src": {"type": "string"}, "month": {"type": "date"},
+                    "v": {"type": "decimal", "scale": 4}},
+        "measure": "v",
+        "metrics": {"avg": "mean", "hi": "max", "lo": "min", "n": "count"},
+        "aggregates": {
+            "by_year_a": {"type": "yearly", "column": "month", "func": "mean",
+                          "where": {"src": "A"}},
+            "max_by_src": {"type": "group", "column": "src", "func": "max"},
+            "min_by_src": {"type": "group", "column": "src", "func": "min"},
+            "n_by_src": {"type": "group", "column": "src", "func": "count"}}})
+    rb = ReportBuilder(schema)
+    for src, y, v in [("A", 2023, "1.00005"), ("A", 2023, "2.0000"), ("A", 2024, "-0.5"),
+                      ("B", 2024, "9.1234")]:
+        rb.add_accepted({"src": src, "month": date(y, 1, 1), "v": Decimal(v)})
+    aggs = rb.aggregates()
+    assert aggs["by_year_a"] == {"2023": 1.5, "2024": -0.5}  # B filtered out; ordered by year
+    assert aggs["max_by_src"] == {"B": 9.1234, "A": 2.0}
+    assert aggs["min_by_src"] == {"B": 9.1234, "A": -0.5}
+    assert aggs["n_by_src"] == {"A": 3, "B": 1}
+    assert rb.metrics() == {"avg": 2.9059, "hi": 9.1234, "lo": -0.5, "n": 4}
+    report = rb.build()
+    assert report["load_type"] == "snapshot" and report["measure"] == "v"
+    assert report["metric_specs"]["hi"] == "max"
+
+
+def test_integer_measure_reports_integers():
+    schema = parse_schema({
+        "dataset": "t", "load_type": "snapshot",
+        "columns": {"y": {"type": "integer"}, "pop": {"type": "integer"}},
+        "measure": "pop", "metrics": {"biggest": "max", "avg": "mean"},
+        "aggregates": {"by_year": {"type": "yearly", "column": "y", "func": "sum"}}})
+    rb = ReportBuilder(schema)
+    rb.add_accepted({"y": 2025, "pop": 8215424893})
+    rb.add_accepted({"y": 2025, "pop": 1})
+    assert rb.aggregates() == {"by_year": {"2025": 8215424894}}
+    assert rb.metrics() == {"biggest": 8215424893, "avg": 4107712447.0}
+    assert isinstance(rb.metrics()["biggest"], int)
+
+
+def test_exclude_filter():
+    schema = parse_schema({
+        "dataset": "t", "load_type": "snapshot",
+        "columns": {"code": {"type": "string"}, "pop": {"type": "integer"}},
+        "measure": "pop",
+        "aggregates": {"countries": {"type": "group", "column": "code", "func": "max",
+                                     "exclude": {"code": ["WLD", "ARB"]}}}})
+    rb = ReportBuilder(schema)
+    for code, pop in [("WLD", 8), ("ARB", 5), ("IND", 3), ("CHN", 2)]:
+        rb.add_accepted({"code": code, "pop": pop})
+    assert rb.aggregates() == {"countries": {"IND": 3, "CHN": 2}}
+    assert rb.build()["aggregate_specs"]["countries"]["exclude"] == {"code": 2}

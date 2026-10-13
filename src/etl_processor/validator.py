@@ -88,6 +88,7 @@ _FAST_DATES = {
     "%d/%m/%Y": (re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$"), (2, 1, 0)),
     "%m/%d/%Y": (re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$"), (2, 0, 1)),
     "%d-%m-%Y": (re.compile(r"^(\d{1,2})-(\d{1,2})-(\d{4})$"), (2, 1, 0)),
+    "%Y-%m": (re.compile(r"^(\d{4})-(\d{1,2})$"), (0, 1, None)),  # month -> 1st of month
 }
 
 
@@ -100,7 +101,7 @@ def parse_date(value: str, formats: tuple[str, ...]) -> date | None:
                 if not match:
                     continue
                 parts = match.groups()
-                year, month, day = (int(parts[i]) for i in fast[1])
+                year, month, day = (1 if i is None else int(parts[i]) for i in fast[1])
                 return date(year, month, day)
             return datetime.strptime(value, fmt).date()
         except ValueError:
@@ -167,19 +168,24 @@ def validate_row(row: dict[str, str | None], schema: Schema) -> list[str]:
 class Deduplicator:
     """Tracks dedup-key values of accepted rows in one file.
 
-    Only rows that already passed validation are registered, so with keep_first an invalid
-    first occurrence does not cause a later valid row with the same key to be rejected.
+    The key may span several columns (e.g. source + month). Only rows that already passed
+    validation are registered, so with keep_first an invalid first occurrence does not cause a
+    later valid row with the same key to be rejected.
     """
 
     def __init__(self, schema: Schema):
         self.key = schema.dedup_key if schema.dedup_policy == "keep_first" else None
-        self._seen: set[str] = set()
+        self._seen: set[tuple[str, ...]] = set()
 
-    def check(self, row: dict[str, str | None]) -> str | None:
-        """Return 'duplicate_id' if this key was already accepted, else register it."""
+    def check(self, row: dict[str, Any]) -> str | None:
+        """Return 'duplicate_id' if this key was already accepted, else register it.
+
+        The pipeline passes the transformed row, so keys are compared after trimming, case
+        normalisation and date parsing ("05/10/2026" and "2026-10-05" are the same date).
+        """
         if self.key is None:
             return None
-        value = (row.get(self.key) or "").strip()
+        value = tuple("" if row.get(k) is None else str(row.get(k)).strip() for k in self.key)
         if value in self._seen:
             return DUPLICATE_ID
         self._seen.add(value)

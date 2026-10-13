@@ -57,7 +57,7 @@ def process_rows(
             except TransformError:
                 reasons.append(DERIVATION_ERROR)
         if not reasons:
-            duplicate = dedup.check(raw)
+            duplicate = dedup.check(clean)  # compare cleaned values: " a " == "A" after normalising
             if duplicate:
                 reasons.append(duplicate)
 

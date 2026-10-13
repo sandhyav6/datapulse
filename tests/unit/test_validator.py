@@ -117,3 +117,23 @@ def test_dedup_policy_none(sales_schema):
     dedup = Deduplicator(replace(sales_schema, dedup_policy="none"))
     assert dedup.check(GOOD) is None
     assert dedup.check(GOOD) is None
+
+
+def test_month_only_dates():
+    from datetime import date
+
+    from etl_processor.validator import parse_date
+    assert parse_date("1850-01", ("%Y-%m",)) == date(1850, 1, 1)
+    assert parse_date("2024-13", ("%Y-%m",)) is None
+    assert parse_date("2024-01-05", ("%Y-%m",)) is None
+
+
+def test_composite_dedup_on_cleaned_values():
+    from etl_processor.config import parse_schema
+    schema = parse_schema({"dataset": "t", "columns": {"a": {"type": "string"},
+                                                       "b": {"type": "string"}},
+                           "dedup_key": ["a", "b"]})
+    dedup = Deduplicator(schema)
+    assert dedup.check({"a": "X", "b": "1"}) is None
+    assert dedup.check({"a": "X", "b": "2"}) is None
+    assert dedup.check({"a": " X ", "b": "1"}) == "duplicate_id"

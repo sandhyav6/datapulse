@@ -19,8 +19,14 @@ from pathlib import Path
 COLUMN_TYPES = {"string", "date", "integer", "decimal"}
 NORMALISERS = {"title", "upper", "lower"}
 DEDUP_POLICIES = {"keep_first", "none"}
-METRIC_FUNCS = {"sum", "mean", "count"}
-AGGREGATE_TYPES = {"daily", "group"}
+METRIC_FUNCS = {"sum", "mean", "min", "max", "count"}
+AGGREGATE_TYPES = {"daily", "group", "yearly"}
+AGGREGATE_FUNCS = {"sum", "mean", "min", "max", "count"}
+# Incremental datasets (each file adds new rows) are combined across files by summing, which
+# is only correct for additive functions. Snapshot datasets (each file replaces the last) are
+# read from the latest job only, so any function is fine.
+LOAD_TYPES = {"incremental", "snapshot"}
+ADDITIVE_FUNCS = {"sum", "count"}
 DATASET_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 DEFAULT_SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
@@ -41,6 +47,7 @@ class ColumnSpec:
     formats: tuple[str, ...] = ()
     normalise: str | None = None
     min: float | None = None
+    scale: int = 2  # decimal places kept for decimal columns (half-up rounding)
 
     @cached_property
     def min_decimal(self) -> Decimal | None:
@@ -49,22 +56,38 @@ class ColumnSpec:
 
 @dataclass(frozen=True)
 class AggregateSpec:
+    """daily: list of {date, total, count}; group: {value: result} sorted by result;
+    yearly: {year: result} in year order. `where` keeps only rows whose column equals a value;
+    `exclude` drops rows whose column is in a set (e.g. World Bank regional aggregates)."""
+
     name: str
-    type: str  # "daily" (list ordered by date) or "group" (mapping value -> total)
+    type: str
     column: str
+    func: str = "sum"
+    where: tuple[tuple[str, str], ...] = ()
+    exclude: tuple[tuple[str, frozenset[str]], ...] = ()
 
 
 @dataclass(frozen=True)
 class Schema:
     dataset: str
     columns: dict[str, ColumnSpec]
-    dedup_key: str | None = None
+    dedup_key: tuple[str, ...] | None = None
     dedup_policy: str = "none"
     derived: dict[str, Callable[[dict], Decimal]] = field(default_factory=dict)
     derived_source: dict[str, str] = field(default_factory=dict)
     measure: str | None = None
     metrics: dict[str, str] = field(default_factory=dict)
     aggregates: tuple[AggregateSpec, ...] = ()
+    load_type: str = "incremental"
+
+    @property
+    def measure_scale(self) -> int:
+        """Decimal places for measure results: the column's scale, 2 for derived fields."""
+        spec = self.columns.get(self.measure or "")
+        if spec is None:
+            return 2
+        return spec.scale if spec.type == "decimal" else 0
 
     @property
     def required_columns(self) -> list[str]:
@@ -166,6 +189,9 @@ def parse_schema(raw: dict) -> Schema:
         if spec.get("normalise") not in (None, *NORMALISERS):
             raise SchemaError(f"column {name!r}: unknown normaliser {spec['normalise']!r}")
         formats = tuple(spec.get("formats", ("%Y-%m-%d",) if ctype == "date" else ()))
+        scale = spec.get("scale", 2)
+        if not isinstance(scale, int) or not 0 <= scale <= 8:
+            raise SchemaError(f"column {name!r}: scale must be an integer 0-8")
         columns[name] = ColumnSpec(
             name=name,
             type=ctype,
@@ -173,14 +199,20 @@ def parse_schema(raw: dict) -> Schema:
             formats=formats,
             normalise=spec.get("normalise"),
             min=spec.get("min"),
+            scale=scale,
         )
 
-    dedup_key = raw.get("dedup_key")
+    raw_key = raw.get("dedup_key")
+    dedup_key = (raw_key,) if isinstance(raw_key, str) else tuple(raw_key or ())
     dedup_policy = raw.get("dedup_policy", "keep_first" if dedup_key else "none")
     if dedup_policy not in DEDUP_POLICIES:
         raise SchemaError(f"unknown dedup_policy {dedup_policy!r}")
-    if dedup_policy != "none" and dedup_key not in columns:
-        raise SchemaError(f"dedup_key {dedup_key!r} is not a column")
+    if dedup_policy != "none" and (not dedup_key or any(k not in columns for k in dedup_key)):
+        raise SchemaError(f"dedup_key {raw_key!r} must name existing columns")
+
+    load_type = raw.get("load_type", "incremental")
+    if load_type not in LOAD_TYPES:
+        raise SchemaError(f"unknown load_type {load_type!r}")
 
     numeric = {n for n, c in columns.items() if c.type in ("integer", "decimal")}
     derived: dict[str, Callable[[dict], Decimal]] = {}
@@ -204,20 +236,38 @@ def parse_schema(raw: dict) -> Schema:
 
     aggregates = []
     for name, spec in raw.get("aggregates", {}).items():
-        if spec.get("type") not in AGGREGATE_TYPES:
-            raise SchemaError(f"aggregate {name!r}: unknown type {spec.get('type')!r}")
-        if spec.get("column") not in columns:
-            raise SchemaError(f"aggregate {name!r}: unknown column {spec.get('column')!r}")
-        if spec["type"] == "daily" and columns[spec["column"]].type != "date":
+        atype, column, func = spec.get("type"), spec.get("column"), spec.get("func", "sum")
+        if atype not in AGGREGATE_TYPES:
+            raise SchemaError(f"aggregate {name!r}: unknown type {atype!r}")
+        if column not in columns:
+            raise SchemaError(f"aggregate {name!r}: unknown column {column!r}")
+        if atype == "daily" and columns[column].type != "date":
             raise SchemaError(f"aggregate {name!r}: daily aggregates need a date column")
+        if atype == "yearly" and columns[column].type not in ("date", "integer"):
+            raise SchemaError(f"aggregate {name!r}: yearly aggregates need a date or integer "
+                              "(year) column")
+        if func not in AGGREGATE_FUNCS or (atype == "daily" and func != "sum"):
+            raise SchemaError(f"aggregate {name!r}: unsupported func {func!r}")
+        if load_type == "incremental" and func not in ADDITIVE_FUNCS:
+            raise SchemaError(f"aggregate {name!r}: incremental datasets are summed across "
+                              f"files, so func must be sum or count, not {func!r}")
+        where, exclude = spec.get("where", {}), spec.get("exclude", {})
+        if any(c not in columns for c in where):
+            raise SchemaError(f"aggregate {name!r}: 'where' names an unknown column")
+        if any(c not in columns or not isinstance(v, list) for c, v in exclude.items()):
+            raise SchemaError(f"aggregate {name!r}: 'exclude' maps known columns to lists")
         if measure is None:
             raise SchemaError(f"aggregate {name!r} needs a 'measure'")
-        aggregates.append(AggregateSpec(name=name, type=spec["type"], column=spec["column"]))
+        aggregates.append(AggregateSpec(
+            name=name, type=atype, column=column, func=func,
+            where=tuple((c, str(v)) for c, v in where.items()),
+            exclude=tuple((c, frozenset(str(x) for x in v)) for c, v in exclude.items())))
 
     return Schema(
         dataset=dataset,
         columns=columns,
         dedup_key=dedup_key if dedup_policy != "none" else None,
+        load_type=load_type,
         dedup_policy=dedup_policy,
         derived=derived,
         derived_source=derived_source,
