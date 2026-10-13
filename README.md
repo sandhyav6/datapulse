@@ -174,6 +174,41 @@ Run against the deployed stack. Each scenario produces evidence for `docs/eviden
 4. The job goes FAILED → SUCCEEDED with `attempts = 4`, and the second dataset appears on the
    Analytics page without any pipeline code change.
 
+## V2: alerts and analytics
+
+Alarm emails already work in V1 once you pass `AlertEmail` and confirm the subscription. V2 adds
+Parquet output, a Glue catalog with partition projection, and Athena
+([ADR 006](docs/decisions/006-parquet-and-athena.md)).
+
+1. Open the **Glue** and **Athena** consoles once in `ap-south-1` to confirm your Free plan
+   account can use them.
+2. Deploy with analytics on:
+
+   ```bash
+   sam deploy --parameter-overrides Stage=dev EnableAnalytics=true AlertEmail=you@example.com
+   ```
+3. Process a file after enabling, so it gets Parquet output. Use a **new name**: identical
+   bytes under the same key are the same job and are skipped as a duplicate.
+
+   ```bash
+   python scripts/upload.py sample_data/dirty_small.csv --name dirty_v2.csv --wait
+   ```
+4. Regenerate the dashboard config so the **Athena SQL** page lights up:
+
+   ```bash
+   python scripts/make_dashboard_env.py
+   ```
+5. Measure CSV against Parquet on identical rows (writes
+   `docs/evidence/athena-comparison.md`):
+
+   ```bash
+   python scripts/compare_formats.py
+   ```
+
+Locally, the same 47,500 clean rows are **66% smaller** as snappy Parquet than as CSV
+(876,620 vs 2,574,747 bytes), and a two-column query needs **89% fewer bytes** because Parquet
+is columnar. The Athena bytes-scanned figures come from step 5.
+
 ## Results
 
 Benchmark figures come only from `scripts/run_benchmark.py` against the deployed stack. It
@@ -188,9 +223,11 @@ acceptance rate, burst behaviour). Copy the table here after your run:
 
 Measured locally (not on AWS):
 
-- **Tests:** 167 tests, 97% line coverage of the Lambda code (`pytest --cov`). They cover
+- **Tests:** 201 tests, 97% line coverage of the Lambda code (`pytest --cov`). They cover
   replay idempotency, crash-after-upload recovery, lease expiry, late-writer protection,
-  poison files, version pinning, redrive recovery, Parquet output and every dashboard page.
+  poison files, version pinning, redrive recovery, Parquet output, every dashboard page, and
+  the template's security rules as code (no wildcard IAM, private encrypted bucket, retry
+  timing, free-tier limits).
 - **Pure row pipeline:** 50,000 rows processed in 2.29 s on the development laptop, after a
   profiling pass cut it from 7.56 s ([ADR 005](docs/decisions/005-lambda-not-glue.md)).
 
@@ -203,6 +240,7 @@ Measured locally (not on AWS):
 | [003](docs/decisions/003-sqs-between-s3-and-lambda.md) | SQS between S3 and Lambda (not direct invoke or EventBridge) |
 | [004](docs/decisions/004-dynamodb-for-job-metadata.md) | DynamoDB, not RDS, for job metadata |
 | [005](docs/decisions/005-lambda-not-glue.md) | Lambda, not Glue ETL jobs, at this data size |
+| [006](docs/decisions/006-parquet-and-athena.md) | Parquet in `curated/`, Glue tables with partition projection, capped Athena workgroup (V2) |
 
 ## Cost
 
