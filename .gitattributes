@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Shell scripts and Makefiles must keep LF endings to run in bash/WSL
+*.sh text eol=lf
+Makefile text eol=lf
+*.csv text eol=lf

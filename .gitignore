@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environments and secrets
+.venv/
+venv/
+.env
+*.pem
+
+# SAM
+.aws-sam/
+
+# Generated benchmark inputs
+sample_data/bench_*.csv
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+CLAUDE.md
+
