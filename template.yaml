@@ -482,9 +482,7 @@ Resources:
             - AnalyticsEnabled
             - Sid: AthenaListsQueriedPrefixes
               Effect: Allow
-              Action:
-                - s3:ListBucket
-                - s3:GetBucketLocation
+              Action: s3:ListBucket
               Resource: !Sub arn:aws:s3:::etl-pipeline-${AWS::AccountId}-${AWS::Region}
               Condition:
                 StringLike:
@@ -493,6 +491,13 @@ Resources:
                     - processed/*
                     - curated/*
                     - athena-results/*
+            - !Ref AWS::NoValue
+          - !If
+            - AnalyticsEnabled
+            - Sid: AthenaResolvesResultsBucket # GetBucketLocation has no s3:prefix key, so it cannot share the conditioned statement
+              Effect: Allow
+              Action: s3:GetBucketLocation
+              Resource: !Sub arn:aws:s3:::etl-pipeline-${AWS::AccountId}-${AWS::Region}
             - !Ref AWS::NoValue
 
   # ---------------------------------------------------------------- V2 analytics (EnableAnalytics=true)
