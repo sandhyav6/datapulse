@@ -67,3 +67,23 @@ def test_empty_bucket_removes_every_version(aws):
     listing = s3.list_object_versions(Bucket=BUCKET)
     assert not listing.get("Versions") and not listing.get("DeleteMarkers")
     s3.delete_bucket(Bucket=BUCKET)  # now possible, which is what sam delete needs
+
+
+import compare_formats  # noqa: E402
+
+
+def test_compare_formats_render():
+    rows = [{"name": "Top 10 categories", "csv": {"bytes": 2_000_000, "ms": 900},
+             "parquet": {"bytes": 200_000, "ms": 700}},
+            {"name": "Row count", "csv": {"bytes": 0, "ms": 10},
+             "parquet": {"bytes": 0, "ms": 10}}]
+    md = compare_formats.render(rows, {"when": "w", "workgroup": "wg", "database": "db"})
+    assert "| Top 10 categories | 2,000,000 B | 200,000 B | 90.0% | 900 ms | 700 ms |" in md
+    assert "| Row count | 0 B | 0 B | — |" in md
+    assert "**90.0% less data scanned**" in md
+
+
+def test_compare_formats_queries_target_both_tables():
+    for template in compare_formats.QUERIES.values():
+        assert "{table}" in template
+        assert template.format(table="sales").lstrip().upper().startswith("SELECT")
