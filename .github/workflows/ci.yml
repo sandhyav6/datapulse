@@ -1,0 +1,92 @@
+name: CI
+
+# Lint, test and validate on every push and pull request.
+# No AWS credentials and no deploy step: everything runs against moto and local tooling.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12" # same as the Lambda runtime
+  AWS_DEFAULT_REGION: ap-south-1
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "ruff>=0.5"
+      - run: ruff check --output-format=github .
+
+  test:
+    name: Tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            dashboard/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: >
+          pytest --cov --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=90 --junitxml=test-results.xml
+      - name: Coverage summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+          cov = ET.parse("coverage.xml").getroot()
+          tests = ET.parse("test-results.xml").getroot()
+          suite = tests if tests.tag == "testsuite" else tests[0]
+          print("### Test results")
+          print(f"- Tests: {suite.get('tests')}, failures: {suite.get('failures')}, "
+                f"errors: {suite.get('errors')}, skipped: {suite.get('skipped')}")
+          print(f"- Line coverage of the Lambda code: {float(cov.get('line-rate')) * 100:.1f}%")
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            test-results.xml
+
+  template:
+    name: Template (cfn-lint + sam validate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "cfn-lint>=1.0"
+      - name: cfn-lint
+        run: cfn-lint template.yaml
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - name: sam validate --lint
+        run: sam validate --lint --template-file template.yaml
+      - name: sam build (package both functions without Docker)
+        run: sam build --template-file template.yaml
