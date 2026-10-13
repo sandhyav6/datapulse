@@ -1,0 +1,28 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "serverless-etl-dev"
+
+[default.build.parameters]
+cached = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+stack_name = "serverless-etl-dev"
+region = "ap-south-1"
+profile = "etl-dev"
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "serverless-etl-dev"
+parameter_overrides = "Stage=dev EnableAnalytics=false"
+
+[default.delete.parameters]
+stack_name = "serverless-etl-dev"
+region = "ap-south-1"
+profile = "etl-dev"
+
+[default.local_invoke.parameters]
+env_vars = "events/local_env.json"

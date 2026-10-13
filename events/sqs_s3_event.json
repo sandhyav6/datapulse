@@ -1,0 +1,20 @@
+{
+  "Records": [
+    {
+      "messageId": "059f36b4-87a3-44ab-83d2-661975830a7d",
+      "receiptHandle": "AQEBwJnKyrHigUMZj6rYigCgxlaS3SLy0a...",
+      "body": "{\"Records\":[{\"eventVersion\":\"2.1\",\"eventSource\":\"aws:s3\",\"awsRegion\":\"ap-south-1\",\"eventTime\":\"2026-10-10T09:14:03.000Z\",\"eventName\":\"ObjectCreated:Put\",\"s3\":{\"s3SchemaVersion\":\"1.0\",\"bucket\":{\"name\":\"etl-pipeline-ACCOUNT_ID-ap-south-1\",\"arn\":\"arn:aws:s3:::etl-pipeline-ACCOUNT_ID-ap-south-1\"},\"object\":{\"key\":\"raw/sales/dirty_small.csv\",\"size\":45123,\"eTag\":\"REPLACE_WITH_ETAG\",\"versionId\":\"REPLACE_WITH_VERSION_ID\",\"sequencer\":\"0066F1A2B3C4D5E6F7\"}}}]}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1791623643000",
+        "SenderId": "AIDAJHIPRHEMV73VRJEBU",
+        "ApproximateFirstReceiveTimestamp": "1791623643010"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "e4e68fb7bd0e697a0ae8f1bb342846b3",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:ap-south-1:ACCOUNT_ID:etl-jobs-dev",
+      "awsRegion": "ap-south-1"
+    }
+  ]
+}

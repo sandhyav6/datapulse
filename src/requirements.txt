@@ -1,0 +1,1 @@
+# The Lambda needs only the standard library and boto3 (provided by the runtime).

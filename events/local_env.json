@@ -1,0 +1,8 @@
+{
+  "EtlProcessorFunction": {
+    "BUCKET_NAME": "etl-pipeline-ACCOUNT_ID-ap-south-1",
+    "TABLE_NAME": "etl-jobs-dev",
+    "SCHEMA_DIR": "/var/task/schemas",
+    "OUTPUT_FORMAT": "csv"
+  }
+}
