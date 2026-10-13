@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import data
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+import data
 
 STATUS_COLORS = {"SUCCEEDED": "#2e9e5b", "FAILED": "#d64545", "PROCESSING": "#e0a526"}
 STATUS_BADGES = {"SUCCEEDED": "🟢 SUCCEEDED", "FAILED": "🔴 FAILED", "PROCESSING": "🟡 PROCESSING"}
@@ -51,6 +52,20 @@ def with_badges(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["status"] = out["status"].map(badge)
     return out
+
+
+def title(name: str) -> str:
+    """'warmest_month_°C' -> 'Warmest month °C' (only the first letter changes case)."""
+    text = name.replace("_", " ")
+    return text[:1].upper() + text[1:]
+
+
+def fmt_number(value) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    if isinstance(value, int) or float(value).is_integer() and abs(value) >= 1000:
+        return f"{int(value):,}"
+    return f"{value:,.4f}".rstrip("0").rstrip(".") if abs(value) < 1000 else f"{value:,.2f}"
 
 
 def fmt_int(value) -> str:

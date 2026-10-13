@@ -3,8 +3,9 @@
 Runs locally as the read-only etl-dashboard IAM identity (AWS_PROFILE in dashboard/.env).
 """
 
-import data
 import streamlit as st
+
+import data
 
 st.set_page_config(page_title="ETL Pipeline", page_icon="🧪", layout="wide")
 
@@ -14,6 +15,7 @@ pages = {
         st.Page("views/jobs.py", title="Jobs", icon="🗂️"),
         st.Page("views/data_quality.py", title="Data quality", icon="🧹"),
         st.Page("views/analytics.py", title="Analytics", icon="📈"),
+        st.Page("views/sources.py", title="Sources", icon="🌐"),
         st.Page("views/operations.py", title="Operations", icon="🛠️"),
     ],
     "V2": [st.Page("views/athena.py", title="Athena SQL", icon="🔎")],

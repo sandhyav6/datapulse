@@ -32,6 +32,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+REPO = Path(__file__).resolve().parent.parent
+SOURCES_FILE = REPO / "src" / "sources.json"
+SCHEMA_DIR = REPO / "src" / "schemas"
+
 STATUSES = ("PROCESSING", "SUCCEEDED", "FAILED")
 DATASET_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # keep test files small while on the Free plan
@@ -57,6 +61,7 @@ class DashboardConfig:
     log_group: str | None = None
     athena_workgroup: str | None = None
     glue_database: str | None = None
+    ingester_function: str | None = None
     profile: str | None = None
     display_tz: str = "Asia/Kolkata"
 
@@ -75,6 +80,7 @@ class DashboardConfig:
             log_group=os.environ.get("LOG_GROUP") or None,
             athena_workgroup=os.environ.get("ATHENA_WORKGROUP") or None,
             glue_database=os.environ.get("GLUE_DATABASE") or None,
+            ingester_function=os.environ.get("INGESTER_FUNCTION") or None,
             profile=os.environ.get("AWS_PROFILE") or None,
             display_tz=os.environ.get("DISPLAY_TZ", "Asia/Kolkata"),
         )
@@ -194,6 +200,76 @@ def combine_aggregates(reports: list[dict]) -> dict[str, Any]:
             out[name] = (pd.Series(bucket, name="total").round(2).sort_values(ascending=False)
                          .rename_axis("key").reset_index())
     return out
+
+
+def aggregate_frames(aggregates: dict[str, Any], specs: dict[str, dict]) -> dict[str, Any]:
+    """One report's aggregates as DataFrames: daily -> (date, total, count); yearly ->
+    (year, value) in year order; group -> (key, value) largest first."""
+    frames: dict[str, Any] = {}
+    for name, value in aggregates.items():
+        kind = (specs.get(name) or {}).get("type") or ("daily" if isinstance(value, list)
+                                                      else "group")
+        if kind == "daily":
+            df = pd.DataFrame(value, columns=["date", "total", "count"])
+            df["date"] = pd.to_datetime(df["date"])
+        elif kind == "yearly":
+            df = pd.DataFrame({"year": [int(k) for k in value], "value": list(value.values())})
+            df = df.sort_values("year")
+        else:
+            df = (pd.DataFrame({"key": list(value), "value": list(value.values())})
+                  .sort_values("value", ascending=False))
+        frames[name] = (kind, df.reset_index(drop=True))
+    return frames
+
+
+def combined_frames(reports: list[dict], specs: dict[str, dict]) -> dict[str, Any]:
+    """Incremental datasets: merge every report's aggregates (all additive by schema rule)."""
+    merged = combine_aggregates(reports)
+    frames: dict[str, Any] = {}
+    for name, df in merged.items():
+        kind = (specs.get(name) or {}).get("type") or ("daily" if "date" in df else "group")
+        if kind == "daily":
+            frames[name] = (kind, df)
+        elif kind == "yearly":
+            out = df.rename(columns={"key": "year", "total": "value"})
+            out["year"] = out["year"].astype(int)
+            frames[name] = (kind, out.sort_values("year").reset_index(drop=True))
+        else:
+            frames[name] = (kind, df.rename(columns={"total": "value"}))
+    return frames
+
+
+# ----------------------------------------------------------------------------- sources
+
+def load_sources(path: Path = SOURCES_FILE) -> list[dict]:
+    return json.loads(path.read_text(encoding="utf-8"))["sources"]
+
+
+def schema_description(dataset: str) -> str:
+    path = SCHEMA_DIR / f"{dataset}.json"
+    if not path.is_file():
+        return ""
+    return json.loads(path.read_text(encoding="utf-8")).get("description", "")
+
+
+def known_datasets() -> list[str]:
+    """Datasets the pipeline has a schema for (the files shipped with the Lambda)."""
+    return sorted(p.stem for p in SCHEMA_DIR.glob("*.json"))
+
+
+def latest_jobs(jobs: pd.DataFrame) -> pd.DataFrame:
+    """Most recent job per dataset (jobs are already newest-first)."""
+    if jobs.empty:
+        return jobs
+    return jobs.dropna(subset=["dataset"]).drop_duplicates("dataset", keep="first")
+
+
+def trigger_ingest(lambda_client, function_name: str, datasets: list[str] | None = None) -> int:
+    """Start the ingester asynchronously; returns the HTTP status (202 = accepted)."""
+    payload = json.dumps({"datasets": datasets} if datasets else {}).encode()
+    response = lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                    Payload=payload)
+    return response["StatusCode"]
 
 
 # ----------------------------------------------------------------------------- operations

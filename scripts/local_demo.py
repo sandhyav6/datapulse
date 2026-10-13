@@ -1,8 +1,9 @@
 """Preview the dashboard with NO AWS account: a local moto server plays S3/SQS/DynamoDB.
 
-It creates the same bucket, queues and table as template.yaml, runs the real Lambda code over
-the sample files (clean, dirty, a poison file that fails 3 times, and a second dataset), then
-starts Streamlit against it.
+It creates the same bucket, queues and table as template.yaml, runs the real ingester against
+the real public sources in src/sources.json (falling back to bundled fixtures when offline),
+runs the real Lambda code over those plus the sales sample files (clean, dirty, a poison file
+that fails 3 times, and a second dataset), then starts Streamlit against it.
 
   pip install "moto[server]"            # once, into your .venv
   python scripts/local_demo.py          # then open http://localhost:8501
@@ -61,12 +62,30 @@ def run_pipeline(res: dict, schema_dir: Path) -> None:
 
     job = EtlJob(Settings(BUCKET, TABLE, schema_dir), S3Storage(res["s3"], BUCKET),
                  JobRepository(res["table"]))
+    from ingester import app as ingester
+
+    keys = []
+    for source in ingester.load_sources(ROOT / "src" / "sources.json"):
+        try:
+            result = ingester.ingest(source, res["s3"], BUCKET)
+            origin = f"live, {result['bytes']:,} bytes from {source.url}"
+        except Exception as exc:  # noqa: BLE001 - offline: use the bundled fixture
+            fixture = (ROOT / "tests" / "fixtures" / f"{source.dataset}_sample.csv").read_bytes()
+            ingester.ingest(source, res["s3"], BUCKET, lambda url, max_bytes, b=fixture: b)
+            origin = f"offline fixture ({type(exc).__name__})"
+        print(f"  ingested {source.dataset:<20} {origin}", flush=True)
+        keys.append((source.key, 1))
+
     uploads = [("sales", "clean_small.csv", 1), ("sales", "dirty_small.csv", 1),
                ("sales", "poison.csv", 3), ("returns", "returns_small.csv", 1)]
     for dataset, name, deliveries in uploads:
         key = f"raw/{dataset}/{name}"
-        body_bytes = (ROOT / "sample_data" / name).read_bytes()
-        res["s3"].put_object(Bucket=BUCKET, Key=key, Body=body_bytes)
+        res["s3"].put_object(Bucket=BUCKET, Key=key,
+                             Body=(ROOT / "sample_data" / name).read_bytes())
+        keys.append((key, deliveries))
+
+    for key, deliveries in keys:
+        name = key.rsplit("/", 1)[-1]
         head = res["s3"].head_object(Bucket=BUCKET, Key=key)
         body = {"Records": [{"eventName": "ObjectCreated:Put", "s3": {
             "bucket": {"name": BUCKET},
@@ -78,7 +97,7 @@ def run_pipeline(res: dict, schema_dir: Path) -> None:
             with contextlib.redirect_stdout(io.StringIO()):
                 result = handle_event(event, job, "local-demo")
         status = "FAILED -> DLQ" if result["batchItemFailures"] else "SUCCEEDED"
-        print(f"  {key:<32} {status}", flush=True)
+        print(f"  {key:<50} {status}", flush=True)
         if result["batchItemFailures"]:
             res["sqs"].send_message(QueueUrl=res["dlq_url"], MessageBody=json.dumps(body))
 
@@ -109,15 +128,16 @@ def main() -> None:
     try:
         res = create_resources(boto3, endpoint)
         with tempfile.TemporaryDirectory() as schemas:
-            shutil.copy(ROOT / "src" / "schemas" / "sales.json", schemas)
-            shutil.copy(ROOT / "docs" / "demo" / "returns.json", schemas)
+            for schema in (ROOT / "src" / "schemas").glob("*.json"):  # everything the Lambda ships
+                shutil.copy(schema, schemas)
+            shutil.copy(ROOT / "docs" / "demo" / "returns.json", schemas)  # + the demo dataset
             print(f"Fake AWS running at {endpoint}. Processing sample files:")
             run_pipeline(res, Path(schemas))
 
         env = {**os.environ, **fake_env, "AWS_ENDPOINT_URL": endpoint, "AWS_PROFILE": "",
                "BUCKET_NAME": BUCKET, "TABLE_NAME": TABLE, "QUEUE_URL": res["queue_url"],
                "DLQ_URL": res["dlq_url"], "LOG_GROUP": "/aws/lambda/etl-processor-local",
-               "ATHENA_WORKGROUP": "", "GLUE_DATABASE": ""}
+               "ATHENA_WORKGROUP": "", "GLUE_DATABASE": "", "INGESTER_FUNCTION": ""}
         if args.seed_only:
             print("Seeded. Press Ctrl+C to stop.")
             server._thread.join()

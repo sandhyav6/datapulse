@@ -1,6 +1,7 @@
-import data
 import plotly.express as px
 import streamlit as st
+
+import data
 import ui
 
 ui.header("Data quality", "Why rows are rejected, per job and over time. Every reason is a "

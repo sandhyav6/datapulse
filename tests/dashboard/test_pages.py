@@ -4,13 +4,15 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from etl_processor.app import handle_event  # noqa: E402
+from etl_processor.app import handle_event
+from ingester import app as ingester
 from tests.conftest import ROOT, SAMPLE_DIR
 from tests.integration.conftest import BUCKET, TABLE, s3_event, sqs_event, upload
 
 APP = str(ROOT / "dashboard" / "app.py")
 PAGES = ["views/overview.py", "views/jobs.py", "views/data_quality.py", "views/analytics.py",
-         "views/operations.py", "views/athena.py"]
+         "views/sources.py", "views/operations.py", "views/athena.py"]
+FIXTURES = ROOT / "tests" / "fixtures"
 
 
 @pytest.fixture
@@ -21,7 +23,7 @@ def dashboard_env(aws, job, monkeypatch):
     monkeypatch.setenv("DLQ_URL", aws["dlq_url"])
     monkeypatch.setenv("LOG_GROUP", "/aws/lambda/etl-processor-test")
     monkeypatch.setenv("AWS_REGION", "ap-south-1")
-    for name in ("AWS_PROFILE", "ATHENA_WORKGROUP", "GLUE_DATABASE"):
+    for name in ("AWS_PROFILE", "ATHENA_WORKGROUP", "GLUE_DATABASE", "INGESTER_FUNCTION"):
         monkeypatch.setenv(name, "")
     st.cache_data.clear()
     st.cache_resource.clear()
@@ -39,6 +41,16 @@ def populate(aws, job):
     aws["sqs"].send_message(QueueUrl=aws["dlq_url"], MessageBody="{}")
 
 
+def populate_public(aws, job):
+    """Ingest the two public-dataset fixtures exactly as the scheduled ingester would."""
+    for dataset in ("global_temperature", "world_population"):
+        source = ingester.Source(dataset=dataset, url=f"https://example.org/{dataset}.csv")
+        body = (FIXTURES / f"{dataset}_sample.csv").read_bytes()
+        ingester.ingest(source, aws["s3"], BUCKET, lambda url, max_bytes, b=body: b)
+        head = aws["s3"].head_object(Bucket=BUCKET, Key=source.key)
+        handle_event(sqs_event(s3_event(source.key, head)), job, "req")
+
+
 def render(page: str) -> AppTest:
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -51,6 +63,7 @@ def render(page: str) -> AppTest:
 @pytest.mark.parametrize("page", PAGES)
 def test_every_page_renders_with_jobs(dashboard_env, job, page):
     populate(dashboard_env, job)
+    populate_public(dashboard_env, job)
     at = render(page)
     assert not at.exception, [e.value for e in at.exception]
     errors = [e.value for e in at.error]
@@ -87,3 +100,23 @@ def test_missing_config_shows_setup(dashboard_env, monkeypatch):
     at = render(PAGES[0])
     assert not at.exception
     assert any("not configured" in w.value for w in at.warning)
+
+
+def test_analytics_shows_latest_snapshot_for_public_data(dashboard_env, job):
+    populate_public(dashboard_env, job)
+    at = render("views/analytics.py")
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Snapshot dataset" in i.value for i in at.info)
+    labels = {m.label for m in at.metric}
+    assert labels & {"Largest population", "Mean anomaly °C"}
+
+
+def test_sources_page_lists_public_sources_with_latest_job(dashboard_env, job):
+    populate_public(dashboard_env, job)
+    at = render("views/sources.py")
+    assert not at.exception, [e.value for e in at.exception]
+    subheaders = [h.value for h in at.subheader]
+    assert "Global temperature" in subheaders and "World population" in subheaders
+    latest = [m.value for m in at.metric if m.label == "Latest job"]
+    assert latest == ["🟢 SUCCEEDED", "🟢 SUCCEEDED"]
+    assert any("INGESTER_FUNCTION" in i.value for i in at.info)  # button needs config

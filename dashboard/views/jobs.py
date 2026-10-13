@@ -1,9 +1,10 @@
 import json
 
-import data
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+import data
 import ui
 
 ui.header("Jobs", "Job history from DynamoDB (status-index). Select a row to see its report.")

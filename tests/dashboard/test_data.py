@@ -10,7 +10,6 @@ from tests.integration.conftest import BUCKET, s3_event, sqs_event, upload
 
 sys.path.insert(0, str(ROOT / "dashboard"))
 import data  # noqa: E402
-
 from etl_processor.app import handle_event, make_job_id  # noqa: E402
 
 
@@ -202,3 +201,53 @@ def test_plain():
     from decimal import Decimal
     assert data.plain({"a": [Decimal("1"), Decimal("1.5")]}) == {"a": [1, 1.5]}
     assert isinstance(pd.DataFrame([data.plain({"x": Decimal("2")})]).x[0].item(), int)
+
+
+def test_aggregate_frames_by_type():
+    specs = {"d": {"type": "daily"}, "y": {"type": "yearly"}, "g": {"type": "group"}}
+    frames = data.aggregate_frames({
+        "d": [{"date": "2026-10-01", "total": 5.0, "count": 2}],
+        "y": {"2025": 2.0, "1960": 1.0},
+        "g": {"small": 1.0, "big": 9.0}}, specs)
+    assert frames["d"][0] == "daily" and str(frames["d"][1].date.dtype).startswith("datetime")
+    assert frames["y"][1].to_dict("records") == [{"year": 1960, "value": 1.0},
+                                                 {"year": 2025, "value": 2.0}]
+    assert list(frames["g"][1].key) == ["big", "small"]
+
+
+def test_combined_frames_sum_incremental_reports():
+    specs = {"by_year": {"type": "yearly"}, "by_cat": {"type": "group"}}
+    reports = [{"aggregates": {"by_year": {"2025": 1.0}, "by_cat": {"a": 1.0}}},
+               {"aggregates": {"by_year": {"2024": 3.0, "2025": 2.0}, "by_cat": {"a": 2.0}}}]
+    frames = data.combined_frames(reports, specs)
+    assert frames["by_year"][1].to_dict("records") == [{"year": 2024, "value": 3.0},
+                                                       {"year": 2025, "value": 3.0}]
+    assert frames["by_cat"][1].to_dict("records") == [{"key": "a", "value": 3.0}]
+
+
+def test_sources_and_schemas_shipped():
+    datasets = [s["dataset"] for s in data.load_sources()]
+    assert datasets == ["global_temperature", "world_population"]
+    assert set(datasets) <= set(data.known_datasets())
+    assert "sales" in data.known_datasets()
+    assert "World Bank" in data.schema_description("world_population")
+    assert data.schema_description("nope") == ""
+
+
+def test_latest_jobs(populated):
+    df = data.jobs_frame(data.query_jobs(populated["table"]))
+    latest = data.latest_jobs(df)
+    assert list(latest.dataset) == ["sales"] and latest.iloc[0].job_id == df.iloc[0].job_id
+    assert data.latest_jobs(df.iloc[0:0]).empty
+
+
+def test_trigger_ingest_is_async():
+    class FakeLambda:
+        def invoke(self, **kwargs):
+            self.kwargs = kwargs
+            return {"StatusCode": 202}
+
+    fake = FakeLambda()
+    assert data.trigger_ingest(fake, "dataset-ingester-dev", ["world_population"]) == 202
+    assert fake.kwargs["InvocationType"] == "Event"
+    assert fake.kwargs["Payload"] == b'{"datasets": ["world_population"]}'

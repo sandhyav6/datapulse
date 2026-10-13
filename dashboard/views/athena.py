@@ -1,6 +1,7 @@
-import data
 import plotly.express as px
 import streamlit as st
+
+import data
 import ui
 
 SAVED_QUERIES = {

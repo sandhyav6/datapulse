@@ -1,5 +1,6 @@
-import data
 import streamlit as st
+
+import data
 import ui
 
 ui.header("Operations", "Queue health, failed jobs and uploads. The dashboard can upload to "
@@ -49,7 +50,7 @@ if not retrying.empty:
 st.subheader("Upload a CSV")
 st.caption("The file goes to `raw/<dataset>/<name>.csv`; S3 notifies SQS and a new job appears "
            "within seconds. Re-uploading identical bytes under the same name is the same job.")
-known = sorted(set(jobs.dataset.dropna()) - {"unknown"} | {"sales"}) if len(jobs) else ["sales"]
+known = data.known_datasets()
 with st.form("upload", clear_on_submit=True):
     u1, u2 = st.columns([1, 3])
     default = ui.busiest(jobs) if len(jobs) else "sales"

@@ -29,6 +29,7 @@ def render(outputs: dict[str, str], dashboard_profile: str, region: str) -> str:
         f"QUEUE_URL={outputs['QueueUrl']}",
         f"DLQ_URL={outputs['DlqUrl']}",
         f"LOG_GROUP={outputs.get('LogGroupName', '')}",
+        f"INGESTER_FUNCTION={outputs.get('IngesterFunctionName', '')}",
         f"ATHENA_WORKGROUP={outputs.get('AthenaWorkgroupName', '')}",
         f"GLUE_DATABASE={outputs.get('GlueDatabaseName', '')}",
         "DISPLAY_TZ=Asia/Kolkata",
