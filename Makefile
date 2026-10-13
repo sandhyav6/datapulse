@@ -8,7 +8,7 @@ REGION ?= ap-south-1
 FILE   ?= sample_data/dirty_small.csv
 DATASET ?= sales
 
-.PHONY: venv test lint build validate deploy upload samples clean
+.PHONY: venv test lint build validate deploy upload samples demo dashboard-env dashboard benchmark teardown clean
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -39,6 +39,21 @@ samples:
 	$(BIN)/python scripts/generate_sample.py --rows 100 --bad-ratio 0 --seed 1 --out sample_data/clean_small.csv
 	$(BIN)/python scripts/generate_sample.py --rows 1000 --bad-ratio 0.05 --seed 42 --out sample_data/dirty_small.csv
 	$(BIN)/python scripts/generate_sample.py --poison --out sample_data/poison.csv
+
+demo:
+	$(BIN)/python scripts/local_demo.py
+
+dashboard-env:
+	$(BIN)/python scripts/make_dashboard_env.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+
+dashboard:
+	$(BIN)/streamlit run dashboard/app.py
+
+benchmark:
+	$(BIN)/python scripts/run_benchmark.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+
+teardown:
+	$(BIN)/python scripts/teardown.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
 
 clean:
 	rm -rf .aws-sam .pytest_cache .ruff_cache .coverage htmlcov
