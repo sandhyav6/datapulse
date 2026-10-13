@@ -12,20 +12,24 @@ We need to know, without opening logs, (a) whether the pipeline is healthy and (
   `job_id` and an `event` name (`job_claimed`, `stage`, `job_finished`, `job_failed`,
   `duplicate_delivery`, ...). Logs Insights discovers the fields automatically.
 - **Custom metrics through Embedded Metric Format.** One log line per finished job declares
-  `RowsAccepted`, `RowsRejected`, `JobDurationMs` and `JobsFailed` in namespace `EtlPipeline`
-  with the single dimension `Dataset`. No `PutMetricData` calls, no extra IAM permission, no
-  added latency. Unknown datasets are reported as `Dataset=unknown`, so a stray upload cannot
-  create new metric series. Two datasets = 8 custom metrics (under the 10 free).
-- **Three alarms**, all `TreatMissingData: notBreaching`, all notifying the `AlertsTopic` SNS
+  `RowsAccepted`, `RowsRejected`, `JobDurationMs` and `JobsFailed` in namespace `EtlPipeline`.
+  No `PutMetricData` calls, no extra IAM permission, no added latency.
+- **No metric dimensions.** The first version used a `Dataset` dimension, which costs 4 custom
+  metrics *per dataset*. With sales, returns and the two public datasets that is 16, past the
+  10 always-free. The metrics are now published without dimensions (exactly 4, whatever the
+  number of datasets). `Dataset` is still a property on every EMF line, so per-dataset numbers
+  come from Logs Insights (`stats sum(RowsRejected) by Dataset`), not from billable series.
+- **Four alarms**, all `TreatMissingData: notBreaching`, all notifying the `AlertsTopic` SNS
   topic:
   | Alarm | Signal | Why |
   |---|---|---|
   | `LambdaErrorsAlarm` | `AWS/Lambda Errors` Sum ≥ 1 / 5 min | crashes the handler could not catch: timeouts, OOM, import errors |
   | `DlqDepthAlarm` | DLQ `ApproximateNumberOfMessagesVisible` ≥ 1 | a job exhausted its retries (poison file, persistent bug) |
   | `QueueAgeAlarm` | `ApproximateAgeOfOldestMessage` > 600 s | the pipeline is stuck or throttled |
+  | `IngesterErrorsAlarm` | `AWS/Lambda Errors` of dataset-ingester ≥ 1 / 5 min | a public source could not be fetched (down, too large, timeout) |
 - **One CloudWatch dashboard** (`etl-pipeline-<stage>`) with Lambda invocations/errors/throttles,
-  duration p95, concurrency, queue depth, DLQ depth, oldest-message age, the four custom metrics
-  (via `SEARCH` so new datasets appear automatically) and a Logs Insights table of recent jobs.
+  duration p95, concurrency, queue depth, DLQ depth, oldest-message age, the four custom
+  metrics, ingester invocations/errors, and a Logs Insights table of recent jobs.
 - **Saved Logs Insights queries**: `recent-jobs` (last 50 jobs) and `job-trace` (every line of
   one job).
 - **14-day log retention** instead of the default "never expire".

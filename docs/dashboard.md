@@ -1,15 +1,17 @@
 # Operator dashboard (Streamlit)
 
-A local Streamlit app that shows job history, data quality, sales analytics and queue health.
-It runs as its own IAM identity, `etl-dashboard`, which can **read** job state and outputs and
-**upload** to `raw/`, but can never modify outputs, job items or queues.
+A local Streamlit app for exploring the public datasets and sales data the pipeline processes,
+along with job history, data quality and queue health. It runs as its own IAM identity,
+`etl-dashboard`, which can **read** job state and outputs, **upload** to `raw/` and **start**
+the public-dataset ingester. It can never modify outputs, job items or queues.
 
 | Page | What it shows | Reads |
 |---|---|---|
 | Overview | files processed, failed jobs, acceptance rate, avg/p95 duration, jobs and rows per day | DynamoDB `status-index` |
 | Jobs | sortable/filterable job table; select a row for its report, outputs, metrics, rejected-row sample and a CloudWatch Logs link | DynamoDB, `reports/`, `rejected/` |
 | Data quality | rejections by reason, per job and over time; acceptance-rate trend; rejected rows | DynamoDB, `rejected/` |
-| Analytics | daily sales, sales by category and region, combined from every report's aggregates | `reports/` |
+| Analytics | every aggregate the dataset's schema defines: yearly lines (world/India/China population, temperature anomaly by record), daily sales, top-15 rankings. Snapshot datasets show their latest version; incremental datasets (sales) are combined across files | `reports/` |
+| Sources | each public source (publisher, license, URL, landing key) with its latest job, plus **Fetch now** to run the ingester immediately | `src/sources.json`, DynamoDB; invokes the ingester |
 | Operations | queue / in-flight / DLQ depth, failed and retrying jobs with errors, CSV upload to `raw/<dataset>/` | SQS attributes, DynamoDB; writes `raw/` |
 | Athena SQL (V2) | saved queries and a SELECT-only SQL box over the Parquet table | Athena, Glue, `curated/`, `athena-results/` |
 
@@ -22,9 +24,10 @@ Results are cached for 30 s (reports for 5 min); **Refresh data** in the sidebar
 python scripts/local_demo.py
 ```
 
-This starts a local moto server that plays S3, SQS and DynamoDB, runs the real Lambda code over
-the sample files (clean, dirty, a poison file that fails three times, and the `returns`
-dataset), and opens the dashboard at http://localhost:8501. Uploads in this mode are stored but
+This starts a local moto server that plays S3, SQS and DynamoDB. It runs the **real ingester**
+against the live public sources (bundled fixtures if offline), then runs the real Lambda code
+over those and the sales sample files (clean, dirty, a poison file that fails three times, and
+the `returns` dataset), and opens the dashboard at http://localhost:8501. Uploads in this mode are stored but
 not processed, because there is no Lambda. Requires `pip install "moto[server]"`.
 
 ## Run it against the deployed stack
@@ -71,8 +74,8 @@ streamlit run dashboard/app.py
 ```
 
 `make_dashboard_env.py` reads the stack outputs with your `etl-dev` profile and writes
-`dashboard/.env` (gitignored) with `AWS_PROFILE=etl-dashboard`, so the app itself always runs
-as the restricted identity. To fill it in by hand, copy `dashboard/.env.example`.
+`dashboard/.env` (gitignored) with `AWS_PROFILE=etl-dashboard` and `INGESTER_FUNCTION` (which
+enables **Fetch now**), so the app itself always runs as the restricted identity. To fill it in by hand, copy `dashboard/.env.example`.
 
 ### 3. Prove the boundary (optional evidence)
 
