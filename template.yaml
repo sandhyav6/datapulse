@@ -418,10 +418,6 @@ Resources:
             Effect: Allow
             Action: dynamodb:Query
             Resource: !Sub ${JobsTable.Arn}/index/status-index
-          - Sid: ReadOneJob
-            Effect: Allow
-            Action: dynamodb:GetItem
-            Resource: !GetAtt JobsTable.Arn
           - Sid: ReadReportsAndOutputs
             Effect: Allow
             Action: s3:GetObject
