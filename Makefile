@@ -8,7 +8,7 @@ REGION ?= ap-south-1
 FILE   ?= sample_data/dirty_small.csv
 DATASET ?= sales
 
-.PHONY: venv test lint build validate deploy upload samples demo dashboard-env dashboard benchmark teardown clean
+.PHONY: venv test lint build validate deploy upload ingest samples demo dashboard-env dashboard benchmark teardown clean
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -34,6 +34,9 @@ deploy:
 
 upload:
 	$(BIN)/python scripts/upload.py $(FILE) --dataset $(DATASET) --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+
+ingest:
+	$(BIN)/python scripts/ingest_now.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
 
 samples:
 	$(BIN)/python scripts/generate_sample.py --rows 100 --bad-ratio 0 --seed 1 --out sample_data/clean_small.csv

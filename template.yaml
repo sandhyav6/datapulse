@@ -30,9 +30,24 @@ Parameters:
     MinValue: 1
     Description: Deliveries before a message moves to the DLQ (the handler marks the job FAILED on the last one).
 
+  IngestSchedule:
+    Type: String
+    Default: cron(30 6 * * ? *)
+    Description: When the dataset-ingester fetches the public datasets (EventBridge Scheduler expression).
+  IngestScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+    Description: Time zone for IngestSchedule.
+  IngestEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Turn the scheduled public-dataset ingestion on or off (on-demand runs always work).
+
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
   AnalyticsEnabled: !Equals [!Ref EnableAnalytics, "true"]
+  IngestScheduleOn: !Equals [!Ref IngestEnabled, "true"]
 
 Resources:
   # ---------------------------------------------------------------- storage
@@ -256,6 +271,71 @@ Resources:
             ScalingConfig:
               MaximumConcurrency: 2 # caps parallelism without reserved concurrency
 
+  # ---------------------------------------------------------------- automatic ingestion
+  IngesterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/dataset-ingester-${Stage}
+      RetentionInDays: 14
+
+  IngesterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: dataset-ingester - fetches public CSVs and writes them to raw/. Nothing else.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: dataset-ingester-least-privilege
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/dataset-ingester-${Stage}:*
+              - Sid: ReadAndWriteRawOnly
+                Effect: Allow
+                Action:
+                  - s3:GetObject # HeadObject for change detection (sha256 metadata)
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::etl-pipeline-${AWS::AccountId}-${AWS::Region}/raw/*
+
+  DatasetIngesterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: IngesterLogGroup
+    Properties:
+      FunctionName: !Sub dataset-ingester-${Stage}
+      Description: Fetches the public CSV datasets in sources.json into raw/<dataset>/ when they change
+      CodeUri: src/
+      Handler: ingester.app.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 120
+      Role: !GetAtt IngesterRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Sub etl-pipeline-${AWS::AccountId}-${AWS::Region}
+          SOURCES_FILE: /var/task/sources.json
+      Events:
+        DailyIngest:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub dataset-ingest-${Stage}
+            Description: Fetch the public datasets; unchanged sources are skipped
+            ScheduleExpression: !Ref IngestSchedule
+            ScheduleExpressionTimezone: !Ref IngestScheduleTimezone
+            State: !If [IngestScheduleOn, ENABLED, DISABLED]
+            RetryPolicy:
+              MaximumRetryAttempts: 2 # safe: an unchanged source is skipped by its sha256
+
   # ---------------------------------------------------------------- alerts & monitoring
   AlertsTopic:
     Type: AWS::SNS::Topic
@@ -328,6 +408,25 @@ Resources:
       AlarmActions: [!Ref AlertsTopic]
       OKActions: [!Ref AlertsTopic]
 
+  IngesterErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub etl-${Stage}-ingest-failed
+      AlarmDescription: A scheduled or on-demand fetch of a public dataset failed (source down, too large, timeout).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DatasetIngesterFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+      OKActions: [!Ref AlertsTopic]
+
   PipelineDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -337,7 +436,7 @@ Resources:
           {
             "widgets": [
               {"type": "text", "x": 0, "y": 0, "width": 24, "height": 2,
-               "properties": {"markdown": "## Serverless ETL pipeline (${Stage})\nS3 raw/ → SQS ${QueueName} → Lambda ${FunctionName} → S3 outputs + DynamoDB ${JobsTable}. DLQ: ${DlqName}."}},
+               "properties": {"markdown": "## Serverless ETL pipeline (${Stage})\nScheduler → ${IngesterName} → S3 raw/ → SQS ${QueueName} → Lambda ${FunctionName} → S3 outputs + DynamoDB ${JobsTable}. DLQ: ${DlqName}."}},
               {"type": "metric", "x": 0, "y": 2, "width": 8, "height": 6,
                "properties": {"title": "Lambda invocations / errors / throttles", "region": "${AWS::Region}", "stat": "Sum", "period": 300, "view": "timeSeries",
                  "metrics": [["AWS/Lambda", "Invocations", "FunctionName", "${FunctionName}"],
@@ -363,15 +462,19 @@ Resources:
                  "annotations": {"horizontal": [{"label": "alarm", "value": 600}]},
                  "metrics": [["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${QueueName}"]]}},
               {"type": "metric", "x": 0, "y": 14, "width": 8, "height": 6,
-               "properties": {"title": "Rows accepted vs rejected", "region": "${AWS::Region}", "period": 300, "view": "timeSeries", "stacked": true,
-                 "metrics": [[{"expression": "SEARCH('{EtlPipeline,Dataset} MetricName=\"RowsAccepted\"', 'Sum', 300)", "id": "accepted", "label": "accepted"}],
-                             [{"expression": "SEARCH('{EtlPipeline,Dataset} MetricName=\"RowsRejected\"', 'Sum', 300)", "id": "rejected", "label": "rejected"}]]}},
+               "properties": {"title": "Rows accepted vs rejected", "region": "${AWS::Region}", "period": 300, "stat": "Sum", "view": "timeSeries", "stacked": true,
+                 "metrics": [["EtlPipeline", "RowsAccepted", {"label": "accepted"}],
+                             [".", "RowsRejected", {"label": "rejected"}]]}},
               {"type": "metric", "x": 8, "y": 14, "width": 8, "height": 6,
                "properties": {"title": "Job duration p95 (ms)", "region": "${AWS::Region}", "period": 300, "view": "timeSeries",
-                 "metrics": [[{"expression": "SEARCH('{EtlPipeline,Dataset} MetricName=\"JobDurationMs\"', 'p95', 300)", "id": "duration", "label": "p95"}]]}},
+                 "metrics": [["EtlPipeline", "JobDurationMs", {"stat": "p95", "label": "p95"}]]}},
               {"type": "metric", "x": 16, "y": 14, "width": 8, "height": 6,
-               "properties": {"title": "Jobs failed", "region": "${AWS::Region}", "period": 300, "view": "timeSeries",
-                 "metrics": [[{"expression": "SEARCH('{EtlPipeline,Dataset} MetricName=\"JobsFailed\"', 'Sum', 300)", "id": "failed", "label": "failed"}]]}},
+               "properties": {"title": "Jobs failed", "region": "${AWS::Region}", "period": 300, "stat": "Sum", "view": "timeSeries",
+                 "metrics": [["EtlPipeline", "JobsFailed"]]}},
+              {"type": "metric", "x": 0, "y": 28, "width": 24, "height": 5,
+               "properties": {"title": "Public dataset ingestion (dataset-ingester)", "region": "${AWS::Region}", "stat": "Sum", "period": 3600, "view": "timeSeries",
+                 "metrics": [["AWS/Lambda", "Invocations", "FunctionName", "${IngesterName}"],
+                             [".", "Errors", ".", "."]]}},
               {"type": "log", "x": 0, "y": 20, "width": 24, "height": 8,
                "properties": {"title": "Recent jobs", "region": "${AWS::Region}", "view": "table",
                  "query": "SOURCE '${LogGroup}' | fields @timestamp, job_id, event, status, dataset, rows_accepted, rows_rejected, duration_ms, error_type | filter event in ['job_finished', 'job_failed', 'duplicate_delivery'] | sort @timestamp desc | limit 50"}}
@@ -380,6 +483,7 @@ Resources:
         - QueueName: !GetAtt JobQueue.QueueName
           DlqName: !GetAtt JobDLQ.QueueName
           FunctionName: !Ref EtlProcessorFunction
+          IngesterName: !Ref DatasetIngesterFunction
           LogGroup: !Ref EtlProcessorLogGroup
 
   RecentJobsQuery:
@@ -435,6 +539,10 @@ Resources:
             Resource:
               - !GetAtt JobQueue.Arn
               - !GetAtt JobDLQ.Arn
+          - Sid: TriggerPublicDatasetFetch
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: !GetAtt DatasetIngesterFunction.Arn
           - !If
             - AnalyticsEnabled
             - Sid: AthenaOnPipelineWorkgroup
@@ -648,6 +756,9 @@ Outputs:
     Value: !Ref JobsTable
   FunctionName:
     Value: !Ref EtlProcessorFunction
+  IngesterFunctionName:
+    Description: Invoke to fetch the public datasets now (scripts/ingest_now.py)
+    Value: !Ref DatasetIngesterFunction
   LogGroupName:
     Value: !Ref EtlProcessorLogGroup
   AlertsTopicArn:

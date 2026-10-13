@@ -1,8 +1,10 @@
 """CloudWatch custom metrics via Embedded Metric Format (EMF).
 
 A metric is just a structured log line that CloudWatch Logs turns into a metric, so there are
-no PutMetricData calls and no extra IAM permissions. Only the Dataset dimension is used, so
-each dataset costs exactly four custom metrics.
+no PutMetricData calls and no extra IAM permissions. Metrics are published with NO dimension,
+so the pipeline costs exactly four custom metrics however many datasets it processes (the
+always-free tier is 10). Dataset is still on every line as a property, so per-dataset numbers
+come from Logs Insights instead of from extra billable metric series.
 """
 
 from __future__ import annotations
@@ -18,13 +20,14 @@ UNKNOWN_DATASET = "unknown"
 def emf_payload(dataset: str, metrics: dict[str, tuple[float, str]],
                 properties: dict[str, Any] | None = None,
                 timestamp_ms: int | None = None) -> dict[str, Any]:
-    """metrics maps name -> (value, unit). Properties are searchable but are not dimensions."""
+    """metrics maps name -> (value, unit). Properties (incl. Dataset) are searchable in Logs
+    Insights but are not dimensions, so they create no extra metrics."""
     payload: dict[str, Any] = {
         "_aws": {
             "Timestamp": timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
             "CloudWatchMetrics": [{
                 "Namespace": NAMESPACE,
-                "Dimensions": [["Dataset"]],
+                "Dimensions": [[]],
                 "Metrics": [{"Name": name, "Unit": unit} for name, (_, unit) in metrics.items()],
             }],
         },

@@ -45,8 +45,9 @@ def resource_text(resource) -> str:
 
 
 LAMBDA_STATEMENTS = statements(props("EtlProcessorRole")["Policies"][0]["PolicyDocument"])
+INGESTER_STATEMENTS = statements(props("IngesterRole")["Policies"][0]["PolicyDocument"])
 DASHBOARD_STATEMENTS = statements(props("DashboardReadPolicy")["PolicyDocument"])
-ALL_STATEMENTS = LAMBDA_STATEMENTS + DASHBOARD_STATEMENTS + statements(
+ALL_STATEMENTS = LAMBDA_STATEMENTS + INGESTER_STATEMENTS + DASHBOARD_STATEMENTS + statements(
     props("JobQueuePolicy")["PolicyDocument"])
 
 
@@ -107,6 +108,30 @@ def test_conditioned_list_bucket_does_not_swallow_other_actions():
     for st in DASHBOARD_STATEMENTS:
         if "s3:prefix" in str(st.get("Condition", {})):
             assert as_list(st["Action"]) == ["s3:ListBucket"]
+
+
+def test_ingester_can_only_touch_raw():
+    actions = {a: [resource_text(r) for r in as_list(st["Resource"])]
+               for st in INGESTER_STATEMENTS for a in as_list(st["Action"])}
+    assert set(actions) == {"logs:CreateLogStream", "logs:PutLogEvents", "s3:GetObject",
+                            "s3:PutObject"}
+    assert all(r.endswith("/raw/*") for r in actions["s3:GetObject"] + actions["s3:PutObject"])
+
+
+def test_ingestion_is_scheduled_and_alarmed():
+    event = props("DatasetIngesterFunction")["Events"]["DailyIngest"]
+    assert event["Type"] == "ScheduleV2"
+    assert event["Properties"]["ScheduleExpression"] == {"Ref": "IngestSchedule"}
+    assert TEMPLATE["Parameters"]["IngestSchedule"]["Default"] == "cron(30 6 * * ? *)"
+    alarm = props("IngesterErrorsAlarm")
+    assert alarm["Dimensions"][0]["Value"] == {"Ref": "DatasetIngesterFunction"}
+
+
+def test_dashboard_may_only_invoke_the_ingester():
+    invokes = [st for st in DASHBOARD_STATEMENTS
+               if "lambda:InvokeFunction" in as_list(st["Action"])]
+    assert [st["Resource"] for st in invokes] == [{"Fn::GetAtt": ["DatasetIngesterFunction",
+                                                                  "Arn"]}]
 
 
 def test_queue_policy_only_trusts_this_bucket_and_account():
@@ -171,7 +196,7 @@ def test_handler_knows_the_redrive_threshold():
 
 def test_every_alarm_notifies():
     alarms = [r for r in RES.values() if r["Type"] == "AWS::CloudWatch::Alarm"]
-    assert len(alarms) == 3
+    assert len(alarms) == 4  # processor errors, DLQ depth, queue age, ingester errors
     for alarm in alarms:
         p = alarm["Properties"]
         assert p["AlarmActions"] == [{"Ref": "AlertsTopic"}]
@@ -189,6 +214,7 @@ def test_stays_inside_always_free_limits():
     assert sum(c["ReadCapacityUnits"] for c in capacity) <= 25
     assert sum(c["WriteCapacityUnits"] for c in capacity) <= 25
     assert props("EtlProcessorLogGroup")["RetentionInDays"] == 14
+    assert props("IngesterLogGroup")["RetentionInDays"] == 14
     types = {r["Type"] for r in RES.values()}
     assert not types & {"AWS::EC2::NatGateway", "AWS::EC2::VPCEndpoint", "AWS::EC2::Instance",
                         "AWS::RDS::DBInstance", "AWS::Glue::Crawler"}

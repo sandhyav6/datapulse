@@ -1,0 +1,20 @@
+{
+  "sources": [
+    {
+      "dataset": "global_temperature",
+      "url": "https://raw.githubusercontent.com/datasets/global-temp/main/data/monthly.csv",
+      "homepage": "https://github.com/datasets/global-temp",
+      "publisher": "NASA GISS GISTEMP and the GCAG global record, packaged by datasets.io (see homepage for provenance)",
+      "license": "CC-BY-4.0",
+      "max_bytes": 5000000
+    },
+    {
+      "dataset": "world_population",
+      "url": "https://raw.githubusercontent.com/datasets/population/main/data/population.csv",
+      "homepage": "https://github.com/datasets/population",
+      "publisher": "World Bank (indicator SP.POP.TOTL), packaged by datasets.io",
+      "license": "ODC-PDDL-1.0 (public domain)",
+      "max_bytes": 5000000
+    }
+  ]
+}

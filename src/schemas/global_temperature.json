@@ -1,0 +1,59 @@
+{
+  "dataset": "global_temperature",
+  "description": "Monthly global surface temperature anomalies in deg C relative to each record's base period, from two records labelled GCAG and GISTEMP. The source column named Year holds a month (YYYY-MM).",
+  "load_type": "snapshot",
+  "columns": {
+    "source": {
+      "type": "string",
+      "required": true,
+      "normalise": "upper"
+    },
+    "year": {
+      "type": "date",
+      "required": true,
+      "formats": [
+        "%Y-%m"
+      ]
+    },
+    "mean": {
+      "type": "decimal",
+      "required": true,
+      "scale": 4
+    }
+  },
+  "dedup_key": [
+    "source",
+    "year"
+  ],
+  "dedup_policy": "keep_first",
+  "measure": "mean",
+  "metrics": {
+    "mean_anomaly_°C": "mean",
+    "warmest_month_°C": "max",
+    "coldest_month_°C": "min",
+    "months": "count"
+  },
+  "aggregates": {
+    "anomaly_by_year_gistemp": {
+      "type": "yearly",
+      "column": "year",
+      "func": "mean",
+      "where": {
+        "source": "GISTEMP"
+      }
+    },
+    "anomaly_by_year_gcag": {
+      "type": "yearly",
+      "column": "year",
+      "func": "mean",
+      "where": {
+        "source": "GCAG"
+      }
+    },
+    "warmest_month_by_source": {
+      "type": "group",
+      "column": "source",
+      "func": "max"
+    }
+  }
+}

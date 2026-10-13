@@ -30,6 +30,7 @@ switch ($Target) {
         & $Py scripts/generate_sample.py --rows 1000 --bad-ratio 0.05 --seed 42 --out sample_data/dirty_small.csv
         & $Py scripts/generate_sample.py --poison --out sample_data/poison.csv
     }
+    "ingest"        { & $Py scripts/ingest_now.py --stack $Stack --profile $AwsProfile --region $Region }
     "demo"          { & $Py scripts/local_demo.py }
     "dashboard-env" { & $Py scripts/make_dashboard_env.py --stack $Stack --profile $AwsProfile --region $Region }
     "dashboard"     { & $Py -m streamlit run dashboard/app.py }
@@ -39,5 +40,5 @@ switch ($Target) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .aws-sam, .pytest_cache, .ruff_cache, .coverage, htmlcov
         Get-ChildItem -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
     }
-    default { Write-Host "Targets: venv test lint build validate deploy upload samples demo dashboard-env dashboard benchmark teardown clean" }
+    default { Write-Host "Targets: venv test lint build validate deploy upload ingest samples demo dashboard-env dashboard benchmark teardown clean" }
 }

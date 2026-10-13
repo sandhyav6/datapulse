@@ -8,7 +8,7 @@ def test_emf_shape():
                                   timestamp_ms=123)
     assert payload == {
         "_aws": {"Timestamp": 123, "CloudWatchMetrics": [{
-            "Namespace": "EtlPipeline", "Dimensions": [["Dataset"]],
+            "Namespace": "EtlPipeline", "Dimensions": [[]],
             "Metrics": [{"Name": "RowsAccepted", "Unit": "Count"}]}]},
         "Dataset": "sales", "RowsAccepted": 5, "job_id": "j"}
 
@@ -30,4 +30,5 @@ def test_job_succeeded_emits_four_metrics_on_one_line(capsys):
 def test_job_failed():
     payload = metrics.job_failed("unknown", job_id="j2", duration_ms=5)
     assert payload["JobsFailed"] == 1
-    assert payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Dataset"]]
+    assert payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [[]]  # 4 metrics total
+    assert payload["Dataset"] == "unknown"  # still searchable as a property
