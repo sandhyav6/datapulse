@@ -1,63 +1,64 @@
 # Run inside WSL2/Linux/macOS. On native Windows use .\make.ps1 <target> instead.
-PYTHON ?= python3
-VENV   := .venv
-BIN    := $(VENV)/bin
-STACK  ?= serverless-etl-dev
+PYTHON  ?= python3
+VENV    := .venv
+PY      := $(abspath $(VENV))/bin/python
+STACK   ?= serverless-etl-dev
 PROFILE ?= etl-dev
-REGION ?= ap-south-1
-FILE   ?= sample_data/dirty_small.csv
-DATASET ?= sales
+REGION  ?= ap-south-1
+EMAIL   ?= sandhya.avm@gmail.com
+AWSARGS := --stack $(STACK) --profile $(PROFILE) --region $(REGION)
 
-.PHONY: venv test lint build validate deploy upload ingest samples demo dashboard-env dashboard benchmark teardown clean
+.PHONY: setup test test-backend test-frontend lint build deploy deploy-frontend dev-api dev-web \
+        ingest upload benchmark teardown clean
 
-venv:
+setup:
 	$(PYTHON) -m venv $(VENV)
-	$(BIN)/pip install --upgrade pip
-	$(BIN)/pip install -r requirements-dev.txt
+	$(PY) -m pip install --upgrade pip
+	$(PY) -m pip install -r backend/requirements-dev.txt
+	cd frontend && npm ci
 
-test:
-	$(BIN)/pytest --cov --cov-report=term-missing
+test: test-backend test-frontend
+
+test-backend:
+	cd backend && $(PY) -m pytest --cov --cov-report=term-missing
+
+test-frontend:
+	cd frontend && npm test
 
 lint:
-	$(BIN)/ruff check .
-	$(BIN)/cfn-lint template.yaml
+	cd backend && $(PY) -m ruff check . && $(abspath $(VENV))/bin/cfn-lint template.yaml
+	cd frontend && npm run lint && npm run typecheck
 
 build:
-	sam build
-
-validate:
-	sam validate --lint
+	cd backend && sam build
+	cd frontend && npm run build
 
 deploy:
-	@echo "Run this yourself (it changes AWS):"
-	@echo "  sam build && sam deploy --profile $(PROFILE)"
+	@echo "Run these yourself (they change AWS):"
+	@echo "  cd backend && sam build && sam deploy --parameter-overrides Stage=dev EnableAnalytics=true AlertEmail=$(EMAIL)"
+	@echo "  make deploy-frontend"
 
-upload:
-	$(BIN)/python scripts/upload.py $(FILE) --dataset $(DATASET) --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+deploy-frontend:
+	cd backend && $(PY) scripts/deploy_frontend.py $(AWSARGS)
+
+dev-api:
+	cd backend && $(PY) scripts/local_demo.py
+
+dev-web:
+	cd frontend && npm run dev
 
 ingest:
-	$(BIN)/python scripts/ingest_now.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+	cd backend && $(PY) scripts/ingest_now.py $(AWSARGS)
 
-samples:
-	$(BIN)/python scripts/generate_sample.py --rows 100 --bad-ratio 0 --seed 1 --out sample_data/clean_small.csv
-	$(BIN)/python scripts/generate_sample.py --rows 1000 --bad-ratio 0.05 --seed 42 --out sample_data/dirty_small.csv
-	$(BIN)/python scripts/generate_sample.py --poison --out sample_data/poison.csv
-
-demo:
-	$(BIN)/python scripts/local_demo.py
-
-dashboard-env:
-	$(BIN)/python scripts/make_dashboard_env.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
-
-dashboard:
-	$(BIN)/streamlit run dashboard/app.py
+upload:
+	cd backend && $(PY) scripts/upload.py $(FILE) --dataset $(or $(DATASET),sales) $(AWSARGS)
 
 benchmark:
-	$(BIN)/python scripts/run_benchmark.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+	cd backend && $(PY) scripts/run_benchmark.py $(AWSARGS)
 
 teardown:
-	$(BIN)/python scripts/teardown.py --stack $(STACK) --profile $(PROFILE) --region $(REGION)
+	cd backend && $(PY) scripts/teardown.py $(AWSARGS)
 
 clean:
-	rm -rf .aws-sam .pytest_cache .ruff_cache .coverage htmlcov
-	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	rm -rf backend/.aws-sam backend/.pytest_cache backend/.ruff_cache backend/.coverage frontend/dist
+	find . -name __pycache__ -type d -prune -not -path "./frontend/node_modules/*" -exec rm -rf {} +

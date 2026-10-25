@@ -2,7 +2,7 @@
 
 An event-driven application that **automatically ingests public CSV datasets**, validates and
 transforms their records, stores clean data and processing metadata, and generates analytics
-that users explore on a dashboard. A scheduled ingester lands public CSVs in
+that users explore on a React website. A scheduled ingester lands public CSVs in
 `s3://<bucket>/raw/<dataset>/` (uploads land there too). Every file there is queued, validated
 against a JSON schema, cleaned, de-duplicated, reported on and tracked, with safe retries, a
 dead-letter queue and alarms. Everything is one AWS SAM template in `ap-south-1`.
@@ -12,7 +12,7 @@ flowchart LR
     SCH([EventBridge Scheduler<br/>daily 06:30 IST]) --> ING[Lambda dataset-ingester]
     PUB[(Public CSV sources<br/>sources.json)] -->|HTTPS, sha256 change check| ING
     ING -->|PutObject only if changed| S3raw
-    U([User / dashboard upload]) -->|PutObject raw/dataset/*.csv| S3raw[(S3 raw/)]
+    U([Operator upload<br/>scripts/upload.py]) -->|PutObject raw/dataset/*.csv| S3raw[(S3 raw/)]
     S3raw -->|ObjectCreated<br/>prefix raw/, suffix .csv| Q[[SQS etl-jobs]]
     Q -->|batch 1, max concurrency 2| L[Lambda etl-processor<br/>python3.12 arm64 512 MB]
     Q -.->|after 3 receives| DLQ[[SQS etl-jobs-dlq]]
@@ -23,16 +23,19 @@ flowchart LR
     CW --> A{{4 alarms}} --> SNS[SNS email]
     ING -.->|errors| A
     DLQ --> A
-    DB([Streamlit dashboard<br/>etl-dashboard identity]) -->|Query| D
-    DB -->|GetObject| OUT
-    DB -->|GetQueueAttributes| Q
+    WEB([Browser]) -->|HTTPS| AMP[Amplify Hosting<br/>React + Vite + Tailwind]
+    AMP -->|/api/* same-origin proxy| GW[API Gateway<br/>HTTP API, GET only, throttled]
+    GW --> API[Lambda etl-api<br/>read-only role]
+    API -->|Query / GetItem| D
+    API -->|GetObject reports/ rejected/| OUT
+    API -->|GetQueueAttributes| Q
     OUT -. V2 .-> G[Glue catalog<br/>partition projection] -.-> ATH[Athena workgroup<br/>100 MB scan cap]
 ```
 
 ## Ingestion: how public data arrives
 
 1. **Schedule.** EventBridge Scheduler invokes `dataset-ingester` daily at 06:30 IST. You can
-   also run it on demand with `scripts/ingest_now.py` or the dashboard's **Fetch now**.
+   also run it on demand with `backend/scripts/ingest_now.py`.
 2. **Fetch.** For each source in `src/sources.json` the ingester downloads the CSV over HTTPS,
    capped at 5 MB (refused, not truncated).
 3. **Compare.** It hashes the bytes and reads the `sha256` metadata of the current
@@ -70,7 +73,8 @@ analytics use the latest job. Sales files are **incremental**: analytics combine
    (V2 adds `curated/…/part-0000.parquet`).
 8. **Finish.** The job is marked SUCCEEDED, conditional on still owning the lease. One EMF log
    line publishes `RowsAccepted`, `RowsRejected`, `JobDurationMs` and `JobsFailed`.
-9. **Observe.** The dashboard reads the job via `status-index` and the report from S3.
+9. **Explore.** The React site calls `/api/*`, and the API Lambda reads the job via
+   `status-index` and the report from S3. See [Web layer](#web-layer).
 
 ## Resources and why each exists
 
@@ -91,7 +95,8 @@ analytics use the latest job. Sales files are **incremental**: analytics combine
 | 4 alarms → `AlertsTopic` | processor `Errors` ≥ 1; DLQ visible ≥ 1; oldest message > 600 s; ingester `Errors` ≥ 1 | crashes, poison files, a stuck pipeline and failed fetches are never silent (ADR 002) |
 | `PipelineDashboard` | invocations/errors/throttles, duration p95, concurrency, queue/DLQ depth, message age, 4 custom metrics, recent-jobs log table | one screen for health and data quality |
 | 2 Logs Insights queries | `recent-jobs`, `job-trace` | fast answers from structured logs |
-| `DashboardReadPolicy` | managed policy for the `etl-dashboard` user | the dashboard can read and upload, never modify outputs |
+| `ApiFunction` + `ApiRole` + `HttpApi` | python3.12 arm64 256 MB; HTTP API `GET /api/{proxy+}`, throttled 10 req/s (burst 20) | the read-only JSON API behind the website (ADR 008) |
+| `SiteApp` + `SiteBranch` | Amplify Hosting, manual deploys; `/api/<*>` reverse-proxied to API Gateway; SPA rewrite; security and cache headers | the public React dashboard over HTTPS (ADR 008) |
 | V2: Glue DB + `sales` / `sales_csv` tables, Athena workgroup, 3 named queries, pandas layer | partition projection, no crawler; 100 MB scan cap | SQL analytics on Parquet without crawler or cluster cost |
 
 ## IAM boundaries
@@ -101,7 +106,8 @@ analytics use the latest job. Sales files are **incremental**: analytics combine
 | `EtlProcessorRole` (Lambda) | `s3:GetObject`/`GetObjectVersion` on `raw/*`; `s3:PutObject` on `processed/*`, `rejected/*`, `reports/*`, `curated/*`; `dynamodb:GetItem`/`UpdateItem` on the table; receive/delete/change visibility on `JobQueue`; write its own log group | read outputs, list or delete any object, scan the table, touch the DLQ or any other queue, create log groups |
 | `IngesterRole` (Lambda) | `s3:GetObject` (HEAD for the hash) and `s3:PutObject` on `raw/*`; write its own log group | read outputs, list the bucket, touch DynamoDB or SQS |
 | Scheduler role (SAM-generated) | `lambda:InvokeFunction` on the ingester only | invoke anything else |
-| `etl-dashboard` user (`DashboardReadPolicy`) | `dynamodb:Query` on `status-index`; `s3:GetObject` on `reports/*`, `processed/*`, `rejected/*`; `s3:PutObject` on `raw/*`; `sqs:GetQueueAttributes` on both queues; `lambda:InvokeFunction` on the ingester (Fetch now); V2: Athena on its workgroup, Glue reads on two tables, `athena-results/*` read/write | write outputs, change job items, scan the table, send/delete messages, run Athena in other workgroups |
+| `ApiRole` (public API Lambda) | `dynamodb:Query` on `status-index`, `GetItem` on the table; `s3:GetObject` on `reports/*` and `rejected/*`; `sqs:GetQueueAttributes` on both queues; V2: Athena on its workgroup, Glue reads on `sales`, `curated/*` read, `athena-results/*` read/write | write or delete anything, scan the table, read `raw/` or `processed/`, send/receive messages, invoke Lambdas |
+| Website visitors | `GET /api/*` only, through Amplify → API Gateway (throttled), and only 3 fixed Athena queries | POST/PUT/DELETE (no route; 405), arbitrary SQL, uploads |
 | `etl-dev` (deploy) | administrator, used by you for `sam deploy`/`sam delete` | not used by any running component |
 | `s3.amazonaws.com` | `sqs:SendMessage` to `JobQueue` from this bucket in this account only | send from any other bucket or account |
 
@@ -115,17 +121,42 @@ No policy uses a wildcard action, and resource wildcards appear only as S3 prefi
 |---|---|---|
 | Public source unchanged | sha256 matches, nothing written, no job | `dataset_ingest` log `status: unchanged` |
 | Public source down / times out / over 5 MB | that source errors, others continue; the run fails after all sources are tried; Scheduler retries | `IngesterErrorsAlarm`, `dataset_ingest` log `status: error` |
-| Publisher changes the file's columns | the new version lands; the pipeline rejects the header as poison → FAILED → DLQ; the previous snapshot stays the latest successful one on the dashboard | `DlqDepthAlarm`, Jobs page |
+| Publisher changes the file's columns | the new version lands; the pipeline rejects the header as poison → FAILED → DLQ; the previous snapshot stays the latest successful one on the website | `DlqDepthAlarm`, Jobs page |
 | Same event delivered twice / replayed | claim finds SUCCEEDED → `duplicate_delivery`, message deleted, nothing rewritten | log line, `attempts` unchanged |
 | Lambda crashes mid-job (timeout, OOM) | lease (300 s) expires before the message reappears (360 s); next delivery reclaims and rewrites the same keys | Lambda `Errors` → `LambdaErrorsAlarm`; `attempts` + 1 |
 | Handled transient error (S3 throttling, network) | lease released immediately, message returned for retry; on the 3rd receive the job is marked FAILED | `job_attempt_failed` logs; job shows `error_type` while retrying |
-| Poison file (missing columns, not UTF-8, unknown dataset, key outside `raw/<dataset>/`) | marked FAILED on every attempt; after 3 receives the message moves to the DLQ | `DlqDepthAlarm`, `JobsFailed`, dashboard Operations page |
+| Poison file (missing columns, not UTF-8, unknown dataset, key outside `raw/<dataset>/`) | marked FAILED on every attempt; after 3 receives the message moves to the DLQ | `DlqDepthAlarm`, `JobsFailed`, website Operations page |
 | Bad rows in a good file | written to `rejected/` with reason codes; the job still SUCCEEDS | report `rejection_reasons`, `RowsRejected`, Data quality page |
 | Same key re-uploaded while a job is queued | the queued job reads the exact `versionId` from its event; the new upload is a new job | two jobs, each with correct data |
 | A late attempt finishes after a newer one | `mark_*` is conditional on `attempt_id`, so the write is rejected | `lease_lost` warning |
 | Malformed SQS message | batch item failure, then DLQ | `record_failed` log, `DlqDepthAlarm` |
 | Pipeline stuck or throttled | messages age in the queue | `QueueAgeAlarm` (> 600 s) |
 | Bug fixed after failures | `scripts/redrive_dlq.sh` moves DLQ messages back; FAILED jobs are reclaimed in place | `attempts` = 4, job SUCCEEDED, DLQ empty |
+
+## Web layer
+
+```
+Browser ──HTTPS──▶ Amplify Hosting (React build, global CDN)
+                     ├─ /assets/*, /index.html ......... static files (assets cached 1 year)
+                     ├─ /jobs/abc, /analytics ...........  rewritten to /index.html (client routing)
+                     └─ /api/* ──reverse proxy──▶ API Gateway HTTP API (GET only, 10 req/s)
+                                                    └─▶ Lambda etl-api (read-only IAM role)
+                                                          ├─ DynamoDB: Query status-index, GetItem
+                                                          ├─ S3: reports/, rejected/ (ranged GET)
+                                                          ├─ SQS: queue depths
+                                                          └─ Athena: 3 saved queries (cached 15 min)
+```
+
+- **Same origin.** The site and the API share one domain, so there is no CORS to configure.
+- **Read-only by construction.** There is no write route in API Gateway, the Lambda refuses
+  non-GET methods, and the IAM role has no write permission except Athena's own result files.
+  Template tests enforce all three.
+- **Protecting the free tier.** API Gateway throttling, 20 s in-memory caches in the Lambda,
+  and `Cache-Control` so browsers reuse responses. A page view costs at most one DynamoDB
+  query per status.
+- **Hosting choice.** S3 + CloudFront was the first design; this account needs AWS Support
+  verification before it can create CloudFront distributions, so Amplify Hosting is used
+  ([ADR 008](decisions/008-react-frontend-on-amplify.md)).
 
 ## Scaling: 100 files arrive at once
 
@@ -145,7 +176,7 @@ No policy uses a wildcard action, and resource wildcards appear only as S3 prefi
 ## Cost (Free plan)
 All V1 services except S3 sit inside always-free allowances at this volume: Lambda (1M
 requests, 400,000 GB-s), SQS (1M requests), DynamoDB (25 RCU/WCU, 25 GB), CloudWatch (we use 4
-of 10 custom metrics, 4 of 10 alarms, 1 of 3 dashboards, a few MB of 5 GB logs), EventBridge
+of 10 custom metrics, 4 of 10 alarms, 1 of 3 CloudWatch dashboards, a few MB of 5 GB logs), API Gateway HTTP API and Amplify Hosting (free-tier allowances), EventBridge
 Scheduler (~30 of 14M invocations per month), and SNS (1,000 emails). Inbound internet data
 transfer for the ingester is free. S3 storage for a few MB
 costs fractions of a cent. Athena (V2) bills per TB scanned, capped at 100 MB per query by the

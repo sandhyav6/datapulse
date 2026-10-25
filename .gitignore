@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 coverage.xml
+test-results.xml
 htmlcov/
 
 # Environments and secrets
@@ -18,7 +19,10 @@ venv/
 .aws-sam/
 
 # Generated benchmark inputs
-sample_data/bench_*.csv
+**/sample_data/bench_*.csv
+
+# Node (frontend/ has its own .gitignore too)
+node_modules/
 
 # Editors / OS
 .vscode/

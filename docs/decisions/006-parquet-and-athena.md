@@ -49,7 +49,22 @@ pipeline's own `JobOutputs`:
 
 Parquet is columnar, so a query reads only the columns it references. CSV must be read whole.
 
-**On Athena**, `scripts/compare_formats.py` runs the same five queries on `sales_csv` and
+**On Athena (measured 2026-10-25, job `5e94a237b6d6e354`, the same 950 rows):**
+
+| Query | CSV scanned | Parquet scanned | Reduction |
+|---|---:|---:|---:|
+| Monthly revenue | 51,520 B | 6,839 B | 86.7% |
+| Top 10 categories | 51,520 B | 6,391 B | 87.6% |
+| Region by month | 51,520 B | 7,312 B | 85.8% |
+| Full row scan (`SELECT *`) | 51,520 B | 19,971 B | 61.2% |
+| `COUNT(*)` | 51,520 B | 0 B (from Parquet metadata) | 100% |
+
+A first attempt filtered the permanent `sales_csv` table by `"$path"`. Athena did **not** prune
+files by that pseudo-column, so the CSV side scanned every processed CSV (4.28 MB) and showed a
+misleading 99.8%. The script now builds two temporary tables over exactly one job's CSV and
+Parquet folders and drops them afterwards.
+
+Previously planned: `scripts/compare_formats.py` runs the same five queries on `sales_csv` and
 `sales` and records `DataScannedInBytes` for each into
 [`docs/evidence/athena-comparison.md`](../evidence/athena-comparison.md). Use those figures,
 not the local ones, for the bytes-scanned claim.

@@ -1,7 +1,8 @@
 name: CI
 
-# Lint, test and validate on every push and pull request.
-# No AWS credentials and no deploy step: everything runs against moto and local tooling.
+# Lint, test, type-check, build and validate on every push and pull request.
+# No AWS credentials and no deploy step: the backend runs against moto, the frontend against
+# mocked API responses.
 on:
   push:
   pull_request:
@@ -16,41 +17,33 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12" # same as the Lambda runtime
+  NODE_VERSION: "24"
   AWS_DEFAULT_REGION: ap-south-1
 
 jobs:
-  lint:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install "ruff>=0.5"
-      - run: ruff check --output-format=github .
-
-  test:
-    name: Tests (pytest + coverage)
+  backend:
+    name: Backend (ruff + pytest + coverage)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: |
-            requirements-dev.txt
-            dashboard/requirements.txt
+          cache-dependency-path: backend/requirements-dev.txt
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: ruff check --output-format=github .
       - name: Run tests
         run: >
           pytest --cov --cov-report=term-missing --cov-report=xml
           --cov-fail-under=90 --junitxml=test-results.xml
-      - name: Coverage summary
+      - name: Test summary
         if: always()
         run: |
           python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
@@ -58,7 +51,7 @@ jobs:
           cov = ET.parse("coverage.xml").getroot()
           tests = ET.parse("test-results.xml").getroot()
           suite = tests if tests.tag == "testsuite" else tests[0]
-          print("### Test results")
+          print("### Backend tests")
           print(f"- Tests: {suite.get('tests')}, failures: {suite.get('failures')}, "
                 f"errors: {suite.get('errors')}, skipped: {suite.get('skipped')}")
           print(f"- Line coverage of the Lambda code: {float(cov.get('line-rate')) * 100:.1f}%")
@@ -66,15 +59,46 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-reports
+          name: backend-test-reports
           path: |
-            coverage.xml
-            test-results.xml
+            backend/coverage.xml
+            backend/test-results.xml
 
-  template:
-    name: Template (cfn-lint + sam validate)
+  frontend:
+    name: Frontend (oxlint + tsc + vitest + vite build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Bundle summary
+        run: |
+          {
+            echo "### Frontend build"
+            echo '```'
+            ls -l dist/assets | awk 'NR>1 {printf "%-40s %8.1f KB\n", $9, $5/1024}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  template:
+    name: Template (cfn-lint + sam validate + sam build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -88,5 +112,5 @@ jobs:
           use-installer: true
       - name: sam validate --lint
         run: sam validate --lint --template-file template.yaml
-      - name: sam build (package both functions without Docker)
+      - name: sam build (all three functions, no Docker)
         run: sam build --template-file template.yaml
